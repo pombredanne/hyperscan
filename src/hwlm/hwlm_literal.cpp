@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2016, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -34,13 +34,11 @@
 #include "util/compare.h" // for ourisalpha
 #include "util/ue2string.h" // for escapeString
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 
-#include <boost/algorithm/cxx11/all_of.hpp>
-
 using namespace std;
-using namespace boost::algorithm;
 
 namespace ue2 {
 
@@ -88,12 +86,20 @@ hwlmLiteral::hwlmLiteral(const std::string &s_in, bool nocase_in,
                          const vector<u8> &msk_in, const vector<u8> &cmp_in)
     : s(s_in), id(id_in), nocase(nocase_in), noruns(noruns_in),
       groups(groups_in), msk(msk_in), cmp(cmp_in) {
+    assert(s.size() <= HWLM_LITERAL_MAX_LEN);
     assert(msk.size() <= HWLM_MASKLEN);
     assert(msk.size() == cmp.size());
 
-    DEBUG_PRINTF("literal '%s', msk=%s, cmp=%s\n",
-                 escapeString(s).c_str(), dumpMask(msk).c_str(),
+    // If we've been handled a nocase literal, all letter characters must be
+    // upper-case.
+    if (nocase) {
+        upperString(s);
+    }
+
+    DEBUG_PRINTF("literal '%s'%s, msk=%s, cmp=%s\n", escapeString(s).c_str(),
+                 nocase ? " (nocase)" : "", dumpMask(msk).c_str(),
                  dumpMask(cmp).c_str());
+
 
     // Mask and compare vectors MUST be the same size.
     assert(msk.size() == cmp.size());
@@ -102,7 +108,7 @@ hwlmLiteral::hwlmLiteral(const std::string &s_in, bool nocase_in,
     assert(maskIsConsistent(s, nocase, msk, cmp));
 
     // In the name of good hygiene, zap msk/cmp if msk is all zeroes.
-    if (all_of_equal(msk.begin(), msk.end(), 0)) {
+    if (all_of(begin(msk), end(msk), [](u8 val) { return val == 0; })) {
         msk.clear();
         cmp.clear();
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -34,7 +34,8 @@
 #define FDR_COMPILE_H
 
 #include "ue2common.h"
-#include "util/alloc.h"
+#include "hwlm/hwlm_build.h"
+#include "util/bytecode_ptr.h"
 
 #include <vector>
 
@@ -43,23 +44,28 @@ struct FDR;
 namespace ue2 {
 
 struct hwlmLiteral;
-struct hwlmStreamingControl;
 struct Grey;
 struct target_t;
 
-ue2::aligned_unique_ptr<FDR>
-fdrBuildTable(const std::vector<hwlmLiteral> &lits, bool make_small,
-              const target_t &target, const Grey &grey,
-              hwlmStreamingControl *stream_control = nullptr);
+bytecode_ptr<FDR> fdrBuildTable(const HWLMProto &proto, const Grey &grey);
 
 #if !defined(RELEASE_BUILD)
-
-ue2::aligned_unique_ptr<FDR>
-fdrBuildTableHinted(const std::vector<hwlmLiteral> &lits, bool make_small,
-                    u32 hint, const target_t &target, const Grey &grey,
-                    hwlmStreamingControl *stream_control = nullptr);
-
+std::unique_ptr<HWLMProto> fdrBuildProtoHinted(
+                                          u8 engType,
+                                          std::vector<hwlmLiteral> lits,
+                                          bool make_small, u32 hint,
+                                          const target_t &target,
+                                          const Grey &grey);
 #endif
+
+std::unique_ptr<HWLMProto> fdrBuildProto(
+                                     u8 engType,
+                                     std::vector<hwlmLiteral> lits,
+                                     bool make_small, const target_t &target,
+                                     const Grey &grey);
+
+/** \brief Returns size in bytes of the given FDR engine. */
+size_t fdrSize(const struct FDR *fdr);
 
 } // namespace ue2
 

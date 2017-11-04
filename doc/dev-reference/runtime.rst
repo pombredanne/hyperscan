@@ -80,6 +80,42 @@ functions for the management of streams:
   another, resetting the destination stream first. This call avoids the
   allocation done by :c:func:`hs_copy_stream`.
 
+==================
+Stream Compression
+==================
+
+A stream object is allocated as a fixed size region of memory which has been
+sized to ensure that no memory allocations are required during scan
+operations. When the system is under memory pressure, it may be useful to reduce
+the memory consumed by streams that are not expected to be used soon. The
+Hyperscan API provides calls for translating a stream to and from a compressed
+representation for this purpose. The compressed representation differs from the
+full stream object as it does not reserve space for components which are not
+required given the current stream state. The Hyperscan API functions for this
+functionality are:
+
+* :c:func:`hs_compress_stream`: fills the provided buffer with a compressed
+  representation of the stream and returns the number of bytes consumed by the
+  compressed representation. If the buffer is not large enough to hold the
+  compressed representation, :c:member:`HS_INSUFFICIENT_SPACE` is returned along
+  with the required size. This call does not modify the original stream in any
+  way: it may still be written to with :c:func:`hs_scan_stream`, used as part of
+  the various reset calls to reinitialise its state, or
+  :c:func:`hs_close_stream` may be called to free its resources.
+
+* :c:func:`hs_expand_stream`: creates a new stream based on a buffer containing
+  a compressed representation.
+
+* :c:func:`hs_reset_and_expand_stream`: constructs a stream based on a buffer
+  containing a compressed representation on top of an existing stream, resetting
+  the existing stream first. This call avoids the allocation done by
+  :c:func:`hs_expand_stream`.
+
+Note: it is not recommended to use stream compression between every call to scan
+for performance reasons as it takes time to convert between the compressed
+representation and a standard stream.
+
+
 **********
 Block Mode
 **********
@@ -124,13 +160,19 @@ databases, only a single scratch region is necessary: in this case, calling
 will ensure that the scratch space is large enough to support scanning against
 any of the given databases.
 
-Importantly, only one such space is required per thread and can (and indeed
-should) be allocated before data scanning is to commence. In a scenario where a
-set of expressions are compiled by a single "master" thread and data will be
-scanned by multiple "worker" threads, the convenience function
-:c:func:`hs_clone_scratch` allows multiple copies of an existing scratch space
-to be made for each thread (rather than forcing the caller to pass all the
-compiled databases through :c:func:`hs_alloc_scratch` multiple times).
+While the Hyperscan library is re-entrant, the use of scratch spaces is not.
+For example, if by design it is deemed necessary to run recursive or nested
+scanning (say, from the match callback function), then an additional scratch
+space is required for that context.
+
+In the absence of recursive scanning, only one such space is required per thread
+and can (and indeed should) be allocated before data scanning is to commence.
+
+In a scenario where a set of expressions are compiled by a single "master"
+thread and data will be scanned by multiple "worker" threads, the convenience
+function :c:func:`hs_clone_scratch` allows multiple copies of an existing
+scratch space to be made for each thread (rather than forcing the caller to pass
+all the compiled databases through :c:func:`hs_alloc_scratch` multiple times).
 
 For example:
 
@@ -162,14 +204,6 @@ For example:
 
     /* Now two threads can both scan against database db,
        each with its own scratch space. */
-
-While the Hyperscan library is re-entrant, the use of scratch spaces is not.
-For example, if by design it is deemed necessary to run recursive or nested
-scanning (say, from the match callback function), then an additional scratch
-space is required for that context.
-
-The easiest way to achieve this is to build up a single scratch space as a
-prototype, then clone it for each context:
 
 *****************
 Custom Allocators

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2016, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -35,20 +35,18 @@
 
 #if defined(DUMP_SUPPORT)
 
-#include <cstdio>
+#include <string>
 
 struct NFA;
 
 namespace ue2 {
 
 /**
- * \brief Dump (in Graphviz 'dot' format) a representation of the NFA into the
- * file pointed to by dotFile.
+ * \brief Dump files representing the engine. All files dumped should begin with
+ * path/prefix specified by base. Generally a text file and a grpahviz (dot)
+ * files should be produced.
  */
-void nfaDumpDot(const struct NFA *nfa, FILE *dotFile);
-
-/** \brief Dump a textual representation of the NFA. */
-void nfaDumpText(const struct NFA *fact, FILE *textFile);
+void nfaGenerateDumpFiles(const struct NFA *nfa, const std::string &base);
 
 } // namespace ue2
 

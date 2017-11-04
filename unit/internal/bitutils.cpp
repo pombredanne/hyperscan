@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -29,32 +29,33 @@
 #include "config.h"
 
 #include "gtest/gtest.h"
+#include "util/arch.h"
 #include "util/bitutils.h"
 #include "util/popcount.h"
 
 // open coded implementations to test against
 static
 u32 our_clz(u32 x) {
-	u32 n;
+    u32 n;
 
-	if (x == 0) return(32);
-	n = 0;
-	if (x <= 0x0000FFFF) { n = n + 16; x = x << 16; }
-	if (x <= 0x00FFFFFF) { n = n + 8; x = x << 8; }
-	if (x <= 0x0FFFFFFF) { n = n + 4; x = x << 4; }
-	if (x <= 0x3FFFFFFF) { n = n + 2; x = x << 2; }
-	if (x <= 0x7FFFFFFF) { n = n + 1; }
-	return n;
+    if (x == 0) return(32);
+    n = 0;
+    if (x <= 0x0000FFFF) { n = n + 16; x = x << 16; }
+    if (x <= 0x00FFFFFF) { n = n + 8; x = x << 8; }
+    if (x <= 0x0FFFFFFF) { n = n + 4; x = x << 4; }
+    if (x <= 0x3FFFFFFF) { n = n + 2; x = x << 2; }
+    if (x <= 0x7FFFFFFF) { n = n + 1; }
+    return n;
 }
 
 static
 u32 our_clzll(u64a x) {
-	// Synthesise from 32-bit variant.
-	u32 high = x >> 32;
-	if (high) {
-		return our_clz(high);
-	}
-	return 32 + our_clz(x);
+    // Synthesise from 32-bit variant.
+    u32 high = x >> 32;
+    if (high) {
+        return our_clz(high);
+    }
+    return 32 + our_clz(x);
 }
 
 
@@ -412,3 +413,40 @@ TEST(BitUtils, bf_it_1) {
     ASSERT_EQ(~0U, bf64_iterate(1ULL << 63, 63));
 }
 
+TEST(BitUtils, rank_in_mask32) {
+    for (u32 i = 0; i < 32; i++) {
+        ASSERT_EQ(i, rank_in_mask32(0xffffffff, i));
+        ASSERT_EQ(0, rank_in_mask32(1U << i, i));
+    }
+    ASSERT_EQ(0, rank_in_mask32(0xf0f0f0f0, 4));
+    ASSERT_EQ(1, rank_in_mask32(0xf0f0f0f0, 5));
+    ASSERT_EQ(3, rank_in_mask32(0xf0f0f0f0, 7));
+    ASSERT_EQ(7, rank_in_mask32(0xf0f0f0f0, 15));
+    ASSERT_EQ(15, rank_in_mask32(0xf0f0f0f0, 31));
+}
+
+TEST(BitUtils, rank_in_mask64) {
+    for (u32 i = 0; i < 64; i++) {
+        ASSERT_EQ(i, rank_in_mask64(0xffffffffffffffffULL, i));
+        ASSERT_EQ(0, rank_in_mask64(1ULL << i, i));
+    }
+    ASSERT_EQ(0, rank_in_mask64(0xf0f0f0f0f0f0f0f0ULL, 4));
+    ASSERT_EQ(1, rank_in_mask64(0xf0f0f0f0f0f0f0f0ULL, 5));
+    ASSERT_EQ(3, rank_in_mask64(0xf0f0f0f0f0f0f0f0ULL, 7));
+    ASSERT_EQ(7, rank_in_mask64(0xf0f0f0f0f0f0f0f0ULL, 15));
+    ASSERT_EQ(15, rank_in_mask64(0xf0f0f0f0f0f0f0f0ULL, 31));
+    ASSERT_EQ(31, rank_in_mask64(0xf0f0f0f0f0f0f0f0ULL, 63));
+}
+
+#if defined(HAVE_BMI2) && defined(ARCH_64_BIT)
+TEST(BitUtils, pdep64) {
+    u64a data = 0xF123456789ABCDEF;
+    ASSERT_EQ(0xfULL, pdep64(data, 0xf));
+    ASSERT_EQ(0xefULL, pdep64(data, 0xff));
+    ASSERT_EQ(0xf0ULL, pdep64(data, 0xf0));
+    ASSERT_EQ(0xfULL, pdep64(data, 0xf));
+    ASSERT_EQ(0xef0ULL, pdep64(data, 0xff0));
+    ASSERT_EQ(0xef00ULL, pdep64(data, 0xff00));
+    ASSERT_EQ(0xd0e0f00ULL, pdep64(data, 0xf0f0f00));
+}
+#endif

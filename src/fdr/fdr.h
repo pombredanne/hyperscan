@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -42,13 +42,7 @@ extern "C" {
 #endif
 
 struct FDR;
-
-/** \brief Returns size in bytes of the given FDR engine. */
-size_t fdrSize(const struct FDR *fdr);
-
-/** \brief Returns non-zero if the contents of the stream state indicate that
- * there is active FDR history beyond the regularly used history. */
-u32 fdrStreamStateActive(const struct FDR *fdr, const u8 *stream_state);
+struct hs_scratch;
 
 /**
  * \brief Block-mode scan.
@@ -56,13 +50,13 @@ u32 fdrStreamStateActive(const struct FDR *fdr, const u8 *stream_state);
  * \param fdr FDR matcher engine.
  * \param buf Buffer to scan.
  * \param len Length of buffer to scan.
- * \param start First offset in buf at which a match may end.
+ * \param start First offset in buf at which a match may start.
  * \param cb Callback to call when a match is found.
- * \param ctxt Caller-provided context pointer supplied to callback on match.
+ * \param scratch Scratch supplied to callback on match.
  * \param groups Initial groups mask.
  */
 hwlm_error_t fdrExec(const struct FDR *fdr, const u8 *buf, size_t len,
-                     size_t start, HWLMCallback cb, void *ctxt,
+                     size_t start, HWLMCallback cb, struct hs_scratch *scratch,
                      hwlm_group_t groups);
 
 /**
@@ -73,16 +67,16 @@ hwlm_error_t fdrExec(const struct FDR *fdr, const u8 *buf, size_t len,
  * \param hlen Length of history buffer (hbuf).
  * \param buf Buffer to scan.
  * \param len Length of buffer to scan (buf).
- * \param start First offset in buf at which a match may end.
+ * \param start First offset in buf at which a match may start.
  * \param cb Callback to call when a match is found.
- * \param ctxt Caller-provided context pointer supplied to callback on match.
+ * \param scratch Scratch supplied to callback on match.
  * \param groups Initial groups mask.
- * \param stream_state Persistent stream state for use by FDR.
  */
 hwlm_error_t fdrExecStreaming(const struct FDR *fdr, const u8 *hbuf,
                               size_t hlen, const u8 *buf, size_t len,
-                              size_t start, HWLMCallback cb, void *ctxt,
-                              hwlm_group_t groups, u8 *stream_state);
+                              size_t start, HWLMCallback cb,
+                              struct hs_scratch *scratch,
+                              hwlm_group_t groups);
 
 #ifdef __cplusplus
 }

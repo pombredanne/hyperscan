@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -34,24 +34,21 @@
 #include "rose/rose_build.h"
 #include "rose/rose_build_impl.h"
 #include "rose/rose_build_merge.h"
+#include "rose/rose_build_role_aliasing.h"
 #include "util/report_manager.h"
 #include "util/boundary_reports.h"
 #include "util/compile_context.h"
 #include "util/graph_range.h"
 #include "util/make_unique.h"
+#include "smallwrite/smallwrite_build.h"
 #include "som/slot_manager.h"
 
-using std::vector;
-using namespace ue2;
+#include <memory>
+#include <unordered_set>
+#include <vector>
 
-static
-std::unique_ptr<RoseBuild> constructBuilder(const Grey &grey) {
-    CompileContext cc(true, false, get_current_target(), grey);
-    ReportManager rm(cc.grey);
-    SomSlotManager ssm(8); // som precision
-    BoundaryReports boundary;
-    return makeRoseBuilder(rm, ssm, cc, boundary);
-}
+using namespace std;
+using namespace ue2;
 
 static
 std::unique_ptr<NGHolder> makeSuffixGraph(ReportID report) {
@@ -72,7 +69,6 @@ RoseVertex addVertex(RoseBuildImpl &build, RoseVertex parent, u32 lit_id) {
     RoseGraph &g = build.g;
 
     RoseVertex v = add_vertex(g);
-    g[v].idx = build.vertexIndex++;
     g[v].min_offset = 0;
     g[v].max_offset = ROSE_BOUND_INF;
     g[v].literals.insert(lit_id);
@@ -87,7 +83,7 @@ RoseVertex addVertex(RoseBuildImpl &build, RoseVertex parent, u32 lit_id) {
 
 static
 size_t numUniqueSuffixGraphs(const RoseGraph &g) {
-    ue2::unordered_set<const NGHolder *> seen;
+    unordered_set<const NGHolder *> seen;
 
     for (const auto &v : vertices_range(g)) {
         if (g[v].suffix) {
@@ -100,7 +96,12 @@ size_t numUniqueSuffixGraphs(const RoseGraph &g) {
 
 TEST(RoseMerge, uncalcLeaves_nonleaf) {
     Grey grey;
-    auto build_base = constructBuilder(grey);
+    CompileContext cc(true, false, get_current_target(), grey);
+    ReportManager rm(cc.grey);
+    SomSlotManager ssm(8); // som precision
+    auto smwr = makeSmallWriteBuilder(1, rm, cc);
+    BoundaryReports boundary;
+    auto build_base = makeRoseBuilder(rm, ssm, *smwr, cc, boundary);
     ASSERT_NE(nullptr, build_base);
 
     RoseBuildImpl &build = static_cast<RoseBuildImpl &>(*build_base);

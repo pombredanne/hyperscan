@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -26,22 +26,24 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/** \file
+/**
+ * \file
  * \brief Main NFA build code.
  */
 
 #ifndef LIMEX_COMPILE_H
 #define LIMEX_COMPILE_H
 
-#include <map>
-#include <memory>
-#include <vector>
-
-#include "ue2common.h"
 #include "nfagraph/ng_holder.h"
 #include "nfagraph/ng_squash.h" // for NFAStateSet
-#include "util/alloc.h"
-#include "util/ue2_containers.h"
+#include "ue2common.h"
+#include "util/bytecode_ptr.h"
+
+#include <set>
+#include <map>
+#include <memory>
+#include <unordered_map>
+#include <vector>
 
 struct NFA;
 
@@ -50,7 +52,8 @@ namespace ue2 {
 struct BoundedRepeatData;
 struct CompileContext;
 
-/** \brief Construct a LimEx NFA from an NGHolder.
+/**
+ * \brief Construct a LimEx NFA from an NGHolder.
  *
  * \param g Input NFA graph. Must have state IDs assigned.
  * \param repeats Bounded repeat information, if any.
@@ -66,33 +69,32 @@ struct CompileContext;
  * \return a built NFA, or nullptr if no NFA could be constructed for this
  * graph.
  */
-aligned_unique_ptr<NFA> generate(NGHolder &g,
-                        const ue2::unordered_map<NFAVertex, u32> &states,
-                        const std::vector<BoundedRepeatData> &repeats,
-                        const std::map<NFAVertex, NFAStateSet> &reportSquashMap,
-                        const std::map<NFAVertex, NFAStateSet> &squashMap,
-                        const std::map<u32, NFAVertex> &tops,
-                        const std::set<NFAVertex> &zombies,
-                        bool do_accel,
-                        bool stateCompression,
-                        u32 hint,
-                        const CompileContext &cc);
+bytecode_ptr<NFA> generate(NGHolder &g,
+            const std::unordered_map<NFAVertex, u32> &states,
+            const std::vector<BoundedRepeatData> &repeats,
+            const std::unordered_map<NFAVertex, NFAStateSet> &reportSquashMap,
+            const std::unordered_map<NFAVertex, NFAStateSet> &squashMap,
+            const std::map<u32, std::set<NFAVertex>> &tops,
+            const std::set<NFAVertex> &zombies,
+            bool do_accel,
+            bool stateCompression,
+            u32 hint,
+            const CompileContext &cc);
 
 /**
- * \brief For a given graph, count the number of accel states it will have in
- * an implementation.
+ * \brief For a given graph, count the number of accelerable states it has.
  *
- * \return the number of accel states, or NFA_MAX_ACCEL_STATES + 1 if an
- * implementation would not be constructible.
+ * Note that this number may be greater than the number that are actually
+ * implementable.
  */
 u32 countAccelStates(NGHolder &h,
-                     const ue2::unordered_map<NFAVertex, u32> &states,
-                     const std::vector<BoundedRepeatData> &repeats,
-                     const std::map<NFAVertex, NFAStateSet> &reportSquashMap,
-                     const std::map<NFAVertex, NFAStateSet> &squashMap,
-                     const std::map<u32, NFAVertex> &tops,
-                     const std::set<NFAVertex> &zombies,
-                     const CompileContext &cc);
+            const std::unordered_map<NFAVertex, u32> &states,
+            const std::vector<BoundedRepeatData> &repeats,
+            const std::unordered_map<NFAVertex, NFAStateSet> &reportSquashMap,
+            const std::unordered_map<NFAVertex, NFAStateSet> &squashMap,
+            const std::map<u32, std::set<NFAVertex>> &tops,
+            const std::set<NFAVertex> &zombies,
+            const CompileContext &cc);
 
 } // namespace ue2
 

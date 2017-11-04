@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -35,24 +35,26 @@
 
 #include "config.h"
 
-#include "ng_dump.h"
+#include "nfagraph/ng_dump.h"
 
-#include "hwlm/hwlm_build.h"
-#include "ng.h"
-#include "ng_util.h"
-#include "parser/position.h"
+#include "hs_compile.h" /* for HS_MODE_* flags */
 #include "ue2common.h"
+#include "compiler/compiler.h"
+#include "hwlm/hwlm_build.h"
 #include "nfa/accel.h"
 #include "nfa/nfa_internal.h" // for MO_INVALID_IDX
-#include "smallwrite/smallwrite_dump.h"
+#include "nfagraph/ng.h"
+#include "nfagraph/ng_util.h"
+#include "parser/position.h"
 #include "rose/rose_build.h"
 #include "rose/rose_internal.h"
+#include "smallwrite/smallwrite_dump.h"
 #include "util/bitutils.h"
 #include "util/dump_charclass.h"
+#include "util/dump_util.h"
 #include "util/report.h"
 #include "util/report_manager.h"
 #include "util/ue2string.h"
-#include "hs_compile.h" /* for HS_MODE_* flags */
 
 #include <cmath>
 #include <fstream>
@@ -174,7 +176,7 @@ public:
         : g(g_in), rm(&rm_in) {}
 
     NFAWriter(const GraphT &g_in,
-              const ue2::unordered_map<NFAVertex, u32> &region_map_in)
+              const unordered_map<NFAVertex, u32> &region_map_in)
         : g(g_in), region_map(&region_map_in) {}
 
     void operator()(ostream& os, const VertexT& v) const {
@@ -234,9 +236,9 @@ public:
     void operator()(ostream& os, const EdgeT& e) const {
         // Edge label. Print priority.
         os << "[fontsize=9,label=\"";
-        // If it's an edge from start, print top id.
-        if (is_any_start(source(e, g), g) && !is_any_start(target(e, g), g)) {
-            os << "TOP " << g[e].top << "\\n";
+        // print tops if any set.
+        if (!g[e].tops.empty()) {
+            os << "TOP " << as_string_list(g[e].tops) << "\\n";
         }
 
         // If it's an assert vertex, then display its info.
@@ -252,7 +254,7 @@ public:
 private:
     const GraphT &g;
     const ReportManager *rm = nullptr;
-    const ue2::unordered_map<NFAVertex, u32> *region_map = nullptr;
+    const unordered_map<NFAVertex, u32> *region_map = nullptr;
 };
 }
 
@@ -276,7 +278,7 @@ void dumpGraphImpl(const char *name, const GraphT &g, const ReportManager &rm) {
 
 template <typename GraphT>
 void dumpGraphImpl(const char *name, const GraphT &g,
-                   const ue2::unordered_map<NFAVertex, u32> &region_map) {
+                   const unordered_map<NFAVertex, u32> &region_map) {
     typedef typename boost::graph_traits<GraphT>::vertex_descriptor VertexT;
     typedef typename boost::graph_traits<GraphT>::edge_descriptor EdgeT;
     ofstream os(name);
@@ -285,15 +287,15 @@ void dumpGraphImpl(const char *name, const GraphT &g,
 }
 
 // manual instantiation of templated dumpGraph above.
-template void dumpGraphImpl(const char *, const NFAGraph &);
+template void dumpGraphImpl(const char *, const NGHolder &);
 
-void dumpDotWrapperImpl(const NGWrapper &nw, const char *name,
-                        const Grey &grey) {
+void dumpDotWrapperImpl(const NGHolder &g, const ExpressionInfo &expr,
+                        const char *name, const Grey &grey) {
     if (grey.dumpFlags & Grey::DUMP_INT_GRAPH) {
         stringstream ss;
-        ss << grey.dumpPath << "Expr_" << nw.expressionIndex << "_" << name << ".dot";
+        ss << grey.dumpPath << "Expr_" << expr.index << "_" << name << ".dot";
         DEBUG_PRINTF("dumping dot graph to '%s'\n", ss.str().c_str());
-        dumpGraphImpl(ss.str().c_str(), nw.g);
+        dumpGraphImpl(ss.str().c_str(), g);
     }
 }
 
@@ -304,7 +306,7 @@ void dumpComponentImpl(const NGHolder &g, const char *name, u32 expr,
         ss << grey.dumpPath << "Comp_" << expr << "-" << comp << "_"
            << name << ".dot";
         DEBUG_PRINTF("dumping dot graph to '%s'\n", ss.str().c_str());
-        dumpGraphImpl(ss.str().c_str(), g.g);
+        dumpGraphImpl(ss.str().c_str(), g);
     }
 }
 
@@ -315,7 +317,7 @@ void dumpSomSubComponentImpl(const NGHolder &g, const char *name, u32 expr,
         ss << grey.dumpPath << "Comp_" << expr << "-" << comp << "_"
            <<  name << "_" << plan << ".dot";
         DEBUG_PRINTF("dumping dot graph to '%s'\n", ss.str().c_str());
-        dumpGraphImpl(ss.str().c_str(), g.g);
+        dumpGraphImpl(ss.str().c_str(), g);
     }
 }
 
@@ -325,19 +327,19 @@ void dumpHolderImpl(const NGHolder &h, unsigned int stageNumber,
         stringstream ss;
         ss << grey.dumpPath << "Holder_X_" << stageNumber
            << "-" << stageName << ".dot";
-        dumpGraphImpl(ss.str().c_str(), h.g);
+        dumpGraphImpl(ss.str().c_str(), h);
     }
 }
 
 void dumpHolderImpl(const NGHolder &h,
-                    const ue2::unordered_map<NFAVertex, u32> &region_map,
+                    const unordered_map<NFAVertex, u32> &region_map,
                     unsigned int stageNumber, const char *stageName,
                     const Grey &grey) {
     if (grey.dumpFlags & Grey::DUMP_INT_GRAPH) {
         stringstream ss;
         ss << grey.dumpPath << "Holder_X_" << stageNumber
            << "-" << stageName << ".dot";
-        dumpGraphImpl(ss.str().c_str(), h.g, region_map);
+        dumpGraphImpl(ss.str().c_str(), h, region_map);
     }
 }
 
@@ -347,46 +349,42 @@ void dumpSmallWrite(const RoseEngine *rose, const Grey &grey) {
     }
 
     const struct SmallWriteEngine *smwr = getSmallWrite(rose);
-
-    stringstream ss;
-    ss << grey.dumpPath << "smallwrite.txt";
-
-    FILE *f = fopen(ss.str().c_str(), "w");
-    smwrDumpText(smwr, f);
-    fclose(f);
-
+    smwrDumpText(smwr, StdioFile(grey.dumpPath + "smallwrite.txt", "w"));
     smwrDumpNFA(smwr, false, grey.dumpPath);
 }
 
-static UNUSED
-const char *irTypeToString(u8 type) {
-#define IR_TYPE_CASE(x) case x: return #x
+static
+const char *reportTypeToString(ReportType type) {
+#define REPORT_TYPE_CASE(x) case x: return #x
     switch (type) {
-        IR_TYPE_CASE(EXTERNAL_CALLBACK);
-        IR_TYPE_CASE(EXTERNAL_CALLBACK_SOM_REL);
-        IR_TYPE_CASE(INTERNAL_SOM_LOC_SET);
-        IR_TYPE_CASE(INTERNAL_SOM_LOC_SET_IF_UNSET);
-        IR_TYPE_CASE(INTERNAL_SOM_LOC_SET_IF_WRITABLE);
-        IR_TYPE_CASE(INTERNAL_SOM_LOC_SET_SOM_REV_NFA);
-        IR_TYPE_CASE(INTERNAL_SOM_LOC_SET_SOM_REV_NFA_IF_UNSET);
-        IR_TYPE_CASE(INTERNAL_SOM_LOC_SET_SOM_REV_NFA_IF_WRITABLE);
-        IR_TYPE_CASE(INTERNAL_SOM_LOC_COPY);
-        IR_TYPE_CASE(INTERNAL_SOM_LOC_COPY_IF_WRITABLE);
-        IR_TYPE_CASE(INTERNAL_SOM_LOC_MAKE_WRITABLE);
-        IR_TYPE_CASE(EXTERNAL_CALLBACK_SOM_STORED);
-        IR_TYPE_CASE(EXTERNAL_CALLBACK_SOM_ABS);
-        IR_TYPE_CASE(EXTERNAL_CALLBACK_SOM_REV_NFA);
-        IR_TYPE_CASE(INTERNAL_SOM_LOC_SET_FROM);
-        IR_TYPE_CASE(INTERNAL_SOM_LOC_SET_FROM_IF_WRITABLE);
-        IR_TYPE_CASE(INTERNAL_ROSE_CHAIN);
-    default: return "<unknown>";
+        REPORT_TYPE_CASE(EXTERNAL_CALLBACK);
+        REPORT_TYPE_CASE(EXTERNAL_CALLBACK_SOM_REL);
+        REPORT_TYPE_CASE(INTERNAL_SOM_LOC_SET);
+        REPORT_TYPE_CASE(INTERNAL_SOM_LOC_SET_IF_UNSET);
+        REPORT_TYPE_CASE(INTERNAL_SOM_LOC_SET_IF_WRITABLE);
+        REPORT_TYPE_CASE(INTERNAL_SOM_LOC_SET_SOM_REV_NFA);
+        REPORT_TYPE_CASE(INTERNAL_SOM_LOC_SET_SOM_REV_NFA_IF_UNSET);
+        REPORT_TYPE_CASE(INTERNAL_SOM_LOC_SET_SOM_REV_NFA_IF_WRITABLE);
+        REPORT_TYPE_CASE(INTERNAL_SOM_LOC_COPY);
+        REPORT_TYPE_CASE(INTERNAL_SOM_LOC_COPY_IF_WRITABLE);
+        REPORT_TYPE_CASE(INTERNAL_SOM_LOC_MAKE_WRITABLE);
+        REPORT_TYPE_CASE(EXTERNAL_CALLBACK_SOM_STORED);
+        REPORT_TYPE_CASE(EXTERNAL_CALLBACK_SOM_ABS);
+        REPORT_TYPE_CASE(EXTERNAL_CALLBACK_SOM_REV_NFA);
+        REPORT_TYPE_CASE(INTERNAL_SOM_LOC_SET_FROM);
+        REPORT_TYPE_CASE(INTERNAL_SOM_LOC_SET_FROM_IF_WRITABLE);
+        REPORT_TYPE_CASE(INTERNAL_ROSE_CHAIN);
+        REPORT_TYPE_CASE(EXTERNAL_CALLBACK_SOM_PASS);
     }
-#undef IR_TYPE_CASE
+#undef REPORT_TYPE_CASE
+
+    assert(0);
+    return "<unknown>";
 }
 
-static really_inline
-int isReverseNfaReport(const Report &ri) {
-    switch (ri.type) {
+static
+int isReverseNfaReport(const Report &report) {
+    switch (report.type) {
     case INTERNAL_SOM_LOC_SET_SOM_REV_NFA:
     case INTERNAL_SOM_LOC_SET_SOM_REV_NFA_IF_UNSET:
     case INTERNAL_SOM_LOC_SET_SOM_REV_NFA_IF_WRITABLE:
@@ -398,9 +396,9 @@ int isReverseNfaReport(const Report &ri) {
     return 0;
 }
 
-static really_inline
-int isSomRelSetReport(const Report &ri) {
-    switch (ri.type) {
+static
+int isSomRelSetReport(const Report &report) {
+    switch (report.type) {
     case INTERNAL_SOM_LOC_SET:
     case INTERNAL_SOM_LOC_SET_IF_UNSET:
     case INTERNAL_SOM_LOC_SET_IF_WRITABLE:
@@ -416,39 +414,45 @@ void dumpReportManager(const ReportManager &rm, const Grey &grey) {
         return;
     }
 
-    stringstream ss;
-    ss << grey.dumpPath << "internal_reports.txt";
-    FILE *f = fopen(ss.str().c_str(), "w");
+    StdioFile f(grey.dumpPath + "internal_reports.txt", "w");
     const vector<Report> &reports = rm.reports();
-    for (u32 i = 0; i < reports.size(); i++) {
-        const Report &ir = reports[i];
-        fprintf(f, "int %u: %s onmatch: %u", i, irTypeToString(ir.type),
-                ir.onmatch);
+    for (size_t i = 0; i < reports.size(); i++) {
+        const Report &report = reports[i];
+        fprintf(f, "%zu: %s onmatch: %u", i, reportTypeToString(report.type),
+                report.onmatch);
 
-        u32 dkey = rm.getDkey(ir);
+        u32 dkey = rm.getDkey(report);
         if (dkey != MO_INVALID_IDX) {
             fprintf(f, " dkey %u", dkey);
         }
-        if (ir.ekey != MO_INVALID_IDX) {
-            fprintf(f, " ekey %u", ir.ekey);
+        if (report.ekey != INVALID_EKEY) {
+            fprintf(f, " ekey %u", report.ekey);
         }
-        if (ir.hasBounds()) {
+        if (report.hasBounds()) {
             fprintf(f, " hasBounds (minOffset=%llu, maxOffset=%llu, "
                        "minLength=%llu)",
-                    ir.minOffset, ir.maxOffset, ir.minLength);
+                    report.minOffset, report.maxOffset, report.minLength);
         }
-        if (ir.offsetAdjust != 0) {
-            fprintf(f, " offsetAdjust: %d", ir.offsetAdjust);
+        if (report.quashSom) {
+            fprintf(f, " quashSom");
         }
-        if (isReverseNfaReport(ir)) {
-            fprintf(f, " reverse nfa: %u", ir.revNfaIndex);
+        if (report.offsetAdjust != 0) {
+            fprintf(f, " offsetAdjust: %d", report.offsetAdjust);
         }
-        if (isSomRelSetReport(ir)) {
-            fprintf(f, " set, adjust: %lld", ir.somDistance);
+        if (isReverseNfaReport(report)) {
+            fprintf(f, " reverse nfa: %u", report.revNfaIndex);
+        }
+        if (isSomRelSetReport(report)) {
+            fprintf(f, " set, adjust: %llu", report.somDistance);
+        }
+        if (report.type == EXTERNAL_CALLBACK_SOM_REL) {
+            fprintf(f, " relative: %llu", report.somDistance);
+        }
+        if (report.type == EXTERNAL_CALLBACK_SOM_ABS) {
+            fprintf(f, " absolute: %llu", report.somDistance);
         }
         fprintf(f, "\n");
     }
-    fclose(f);
 }
 
 } // namespace ue2

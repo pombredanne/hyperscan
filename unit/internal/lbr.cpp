@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -29,26 +29,28 @@
 #include "config.h"
 #include "gtest/gtest.h"
 
-#include "util/target_info.h"
-#include "util/charreach.h"
+#include "grey.h"
+#include "hs_compile.h" /* for controlling ssse3 usage */
+#include "compiler/compiler.h"
 #include "nfa/lbr.h"
 #include "nfa/nfa_api.h"
-#include "nfa/nfa_internal.h"
 #include "nfa/nfa_api_util.h"
-#include "nfagraph/ng_lbr.h"
-#include "scratch.h"
-#include "util/alloc.h"
-#include "util/compile_context.h"
-#include "grey.h"
+#include "nfa/nfa_internal.h"
 #include "nfagraph/ng.h"
-#include "compiler/compiler.h"
-#include "hs_compile.h" /* for controlling ssse3 usage */
+#include "nfagraph/ng_lbr.h"
+#include "nfagraph/ng_util.h"
+#include "util/bytecode_ptr.h"
+#include "util/charreach.h"
+#include "util/compile_context.h"
+#include "util/target_info.h"
 
 #include <ostream>
 
 using namespace std;
 using namespace testing;
 using namespace ue2;
+
+static constexpr u32 MATCH_REPORT = 1024;
 
 struct LbrTestParams {
     CharReach reach;
@@ -70,7 +72,7 @@ struct LbrTestParams {
 };
 
 static
-int onMatch(u64a, ReportID, void *ctx) {
+int onMatch(u64a, u64a, ReportID, void *ctx) {
     unsigned *matches = (unsigned *)ctx;
     (*matches)++;
     return MO_CONTINUE_MATCHING;
@@ -94,19 +96,20 @@ protected:
         const CompileContext cc(true, false, target, grey);
         ReportManager rm(cc.grey);
         ParsedExpression parsed(0, pattern.c_str(), flags, 0);
-        unique_ptr<NGWrapper> g = buildWrapper(rm, cc, parsed);
+        auto built_expr = buildGraph(rm, cc, parsed);
+        const auto &g = built_expr.g;
         ASSERT_TRUE(g != nullptr);
+        clearReports(*g);
 
-        ASSERT_TRUE(isLBR(*g, grey));
+        rm.setProgramOffset(0, MATCH_REPORT);
 
-        vector<vector<CharReach> > triggers;
-        triggers.push_back(vector<CharReach>());
-        triggers.back().push_back(CharReach::dot()); /* lbr triggered by . */
-        nfa = constructLBR(*g, triggers, cc);
+        /* LBR triggered by dot */
+        vector<vector<CharReach>> triggers = {{CharReach::dot()}};
+        nfa = constructLBR(*g, triggers, cc, rm);
         ASSERT_TRUE(nfa != nullptr);
 
-        full_state = aligned_zmalloc_unique<char>(nfa->scratchStateSize);
-        stream_state = aligned_zmalloc_unique<char>(nfa->streamStateSize);
+        full_state = make_bytecode_ptr<char>(nfa->scratchStateSize, 64);
+        stream_state = make_bytecode_ptr<char>(nfa->streamStateSize);
     }
 
     virtual void initQueue() {
@@ -123,7 +126,6 @@ protected:
         q.scratch = nullptr; // not needed by LBR
         q.report_current = 0;
         q.cb = onMatch;
-        q.som_cb = nullptr; // only used by Haig
         q.context = &matches;
     }
 
@@ -148,16 +150,13 @@ protected:
     unsigned matches;
 
     // Compiled NFA structure.
-    aligned_unique_ptr<NFA> nfa;
+    bytecode_ptr<NFA> nfa;
 
-    // Space for full state.
-    aligned_unique_ptr<char> full_state;
+    // Aligned space for full state.
+    bytecode_ptr<char> full_state;
 
     // Space for stream state.
-    aligned_unique_ptr<char> stream_state;
-
-    // Space for NFAContext structure.
-    aligned_unique_ptr<void> nfa_context;
+    bytecode_ptr<char> stream_state;
 
     // Queue structure.
     struct mq q;
@@ -252,7 +251,7 @@ TEST_P(LbrTest, QueueExecToMatch) {
     char rv = nfaQueueExecToMatch(nfa.get(), &q, end);
     ASSERT_EQ(MO_MATCHES_PENDING, rv);
     ASSERT_EQ(0, matches);
-    ASSERT_NE(0, nfaInAcceptState(nfa.get(), 0, &q));
+    ASSERT_NE(0, nfaInAcceptState(nfa.get(), MATCH_REPORT, &q));
     nfaReportCurrentMatches(nfa.get(), &q);
     ASSERT_EQ(1, matches);
 }

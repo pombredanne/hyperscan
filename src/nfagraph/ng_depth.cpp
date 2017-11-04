@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -26,29 +26,34 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/** \file
+/**
+ * \file
  * \brief NFA graph vertex depth calculations.
  */
 #include "ng_depth.h"
 #include "ng_util.h"
 #include "ue2common.h"
 #include "util/graph_range.h"
+#include "util/graph_small_color_map.h"
 
 #include <deque>
 #include <vector>
 
+#include <boost/graph/breadth_first_search.hpp>
 #include <boost/graph/dag_shortest_paths.hpp>
 #include <boost/graph/depth_first_search.hpp>
-#include <boost/graph/breadth_first_search.hpp>
 #include <boost/graph/filtered_graph.hpp>
+#include <boost/graph/property_maps/constant_property_map.hpp>
 #include <boost/graph/reverse_graph.hpp>
 #include <boost/graph/topological_sort.hpp>
-#include <boost/graph/property_maps/constant_property_map.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 
 using namespace std;
 using boost::filtered_graph;
+using boost::make_filtered_graph;
 using boost::make_constant_property;
 using boost::reverse_graph;
+using boost::adaptors::reverse;
 
 namespace ue2 {
 
@@ -120,37 +125,37 @@ private:
 
 } // namespace
 
-template<class GraphT>
+template<class Graph>
 static
-void findLoopReachable(const GraphT &g, const NFAVertex srcVertex,
-                       vector<bool> &deadNodes) {
-    typedef typename GraphT::edge_descriptor EdgeT;
-    typedef set<EdgeT> EdgeSet;
+vector<bool> findLoopReachable(const Graph &g,
+                               const typename Graph::vertex_descriptor src) {
+    vector<bool> deadNodes(num_vertices(g));
+
+    using Edge = typename Graph::edge_descriptor;
+    using Vertex = typename Graph::vertex_descriptor;
+    using EdgeSet = set<Edge>;
 
     EdgeSet deadEdges;
     BackEdges<EdgeSet> be(deadEdges);
 
-    auto index_map = get(&NFAGraphVertexProps::index, g);
+    auto colors = make_small_color_map(g);
 
-    depth_first_search(g, visitor(be).root_vertex(srcVertex).vertex_index_map(
-                              index_map));
-    AcyclicFilter<EdgeSet> af(&deadEdges);
-    filtered_graph<GraphT, AcyclicFilter<EdgeSet> > acyclic_g(g, af);
+    depth_first_search(g, be, colors, src);
+    auto af = make_bad_edge_filter(&deadEdges);
+    auto acyclic_g = make_filtered_graph(g, af);
 
-    vector<NFAVertex> topoOrder; /* actually reverse topological order */
+    vector<Vertex> topoOrder; /* actually reverse topological order */
     topoOrder.reserve(deadNodes.size());
-    topological_sort(acyclic_g, back_inserter(topoOrder),
-                     vertex_index_map(index_map));
+    topological_sort(acyclic_g, back_inserter(topoOrder), color_map(colors));
 
     for (const auto &e : deadEdges) {
-        u32 srcIdx = g[source(e, g)].index;
+        size_t srcIdx = g[source(e, g)].index;
         if (srcIdx != NODE_START_DOTSTAR) {
             deadNodes[srcIdx] = true;
         }
     }
 
-    for (auto it = topoOrder.rbegin(); it != topoOrder.rend(); ++it) {
-        NFAVertex v = *it;
+    for (auto v : reverse(topoOrder)) {
         for (const auto &e : in_edges_range(v, g)) {
             if (deadNodes[g[source(e, g)].index]) {
                 deadNodes[g[v].index] = true;
@@ -158,17 +163,19 @@ void findLoopReachable(const GraphT &g, const NFAVertex srcVertex,
             }
         }
     }
+
+    return deadNodes;
 }
 
 template <class GraphT>
 static
-void calcDepthFromSource(const NGHolder &graph, const GraphT &g,
+void calcDepthFromSource(const GraphT &g,
                          typename GraphT::vertex_descriptor srcVertex,
-                         const vector<bool> &deadNodes,
-                         vector<int> &dMin, vector<int> &dMax) {
+                         const vector<bool> &deadNodes, vector<int> &dMin,
+                         vector<int> &dMax) {
     typedef typename GraphT::edge_descriptor EdgeT;
 
-    const size_t numVerts = num_vertices(graph);
+    const size_t numVerts = num_vertices(g);
 
     NodeFilter<GraphT> nf(&deadNodes, &g);
     StartFilter<GraphT> sf(&g);
@@ -194,22 +201,22 @@ void calcDepthFromSource(const NGHolder &graph, const GraphT &g,
 
     using boost::make_iterator_property_map;
 
-    auto min_index_map = get(&NFAGraphVertexProps::index, mindist_g);
+    auto min_index_map = get(vertex_index, mindist_g);
 
     breadth_first_search(mindist_g, srcVertex,
-            boost::vertex_index_map(min_index_map).
                          visitor(make_bfs_visitor(record_distances(
-                             make_iterator_property_map(
-                                 dMin.begin(), min_index_map),
-                             boost::on_tree_edge()))));
+                             make_iterator_property_map(dMin.begin(),
+                                                        min_index_map),
+                             boost::on_tree_edge())))
+                         .color_map(make_small_color_map(mindist_g)));
 
-    auto max_index_map = get(&NFAGraphVertexProps::index, maxdist_g);
+    auto max_index_map = get(vertex_index, maxdist_g);
 
     dag_shortest_paths(maxdist_g, srcVertex,
-            boost::vertex_index_map(max_index_map).
-            distance_map(make_iterator_property_map(dMax.begin(),
-                         max_index_map)).
-            weight_map(make_constant_property<EdgeT>(-1)));
+                       distance_map(make_iterator_property_map(dMax.begin(),
+                                                               max_index_map))
+                       .weight_map(make_constant_property<EdgeT>(-1))
+                       .color_map(make_small_color_map(maxdist_g)));
 
     for (size_t i = 0; i < numVerts; i++) {
         if (dMin[i] > DIST_UNREACHABLE) {
@@ -254,14 +261,14 @@ DepthMinMax getDepths(u32 idx, const vector<int> &dMin,
 
 template<class Graph, class Output>
 static
-void calcAndStoreDepth(const NGHolder &h, const Graph &g,
+void calcAndStoreDepth(const Graph &g,
                        const typename Graph::vertex_descriptor src,
                        const vector<bool> &deadNodes,
                        vector<int> &dMin /* util */,
                        vector<int> &dMax /* util */,
                        vector<Output> &depths,
                        DepthMinMax Output::*store) {
-    calcDepthFromSource(h, g, src, deadNodes, dMin, dMax);
+    calcDepthFromSource(g, src, deadNodes, dMin, dMax);
 
     for (auto v : vertices_range(g)) {
         u32 idx = g[v].index;
@@ -271,12 +278,11 @@ void calcAndStoreDepth(const NGHolder &h, const Graph &g,
     }
 }
 
-void calcDepths(const NGHolder &g, std::vector<NFAVertexDepth> &depths) {
+vector<NFAVertexDepth> calcDepths(const NGHolder &g) {
     assert(hasCorrectlyNumberedVertices(g));
     const size_t numVertices = num_vertices(g);
-    depths.clear();
-    depths.resize(numVertices);
 
+    vector<NFAVertexDepth> depths(numVertices);
     vector<int> dMin;
     vector<int> dMax;
 
@@ -284,54 +290,56 @@ void calcDepths(const NGHolder &g, std::vector<NFAVertexDepth> &depths) {
      * create a filtered graph for max depth calculations: all nodes/edges
      * reachable from a loop need to be removed
      */
-    vector<bool> deadNodes(numVertices);
-    findLoopReachable(g.g, g.start, deadNodes);
+    auto deadNodes = findLoopReachable(g, g.start);
 
     DEBUG_PRINTF("doing start\n");
-    calcAndStoreDepth(g, g.g, g.start, deadNodes, dMin, dMax,
-                      depths, &NFAVertexDepth::fromStart);
+    calcAndStoreDepth(g, g.start, deadNodes, dMin, dMax, depths,
+                      &NFAVertexDepth::fromStart);
     DEBUG_PRINTF("doing startds\n");
-    calcAndStoreDepth(g, g.g, g.startDs, deadNodes, dMin, dMax,
-                      depths, &NFAVertexDepth::fromStartDotStar);
+    calcAndStoreDepth(g, g.startDs, deadNodes, dMin, dMax, depths,
+                      &NFAVertexDepth::fromStartDotStar);
+
+    return depths;
 }
 
-void calcDepths(const NGHolder &g, std::vector<NFAVertexRevDepth> &depths) {
+vector<NFAVertexRevDepth> calcRevDepths(const NGHolder &g) {
     assert(hasCorrectlyNumberedVertices(g));
     const size_t numVertices = num_vertices(g);
-    depths.clear();
-    depths.resize(numVertices);
 
+    vector<NFAVertexRevDepth> depths(numVertices);
     vector<int> dMin;
     vector<int> dMax;
 
     /* reverse the graph before walking it */
-    typedef reverse_graph<NFAGraph, const NFAGraph&> RevNFAGraph;
-    const RevNFAGraph rg(g.g);
+    typedef reverse_graph<NGHolder, const NGHolder &> RevNFAGraph;
+    const RevNFAGraph rg(g);
+
+    assert(num_vertices(g) == num_vertices(rg));
 
     /*
      * create a filtered graph for max depth calculations: all nodes/edges
      * reachable from a loop need to be removed
      */
-    vector<bool> deadNodes(numVertices);
-    findLoopReachable(rg, g.acceptEod, deadNodes);
+    auto deadNodes = findLoopReachable(rg, g.acceptEod);
 
     DEBUG_PRINTF("doing accept\n");
     calcAndStoreDepth<RevNFAGraph, NFAVertexRevDepth>(
-        g, rg, g.accept, deadNodes, dMin, dMax, depths,
+        rg, g.accept, deadNodes, dMin, dMax, depths,
         &NFAVertexRevDepth::toAccept);
     DEBUG_PRINTF("doing accepteod\n");
     deadNodes[NODE_ACCEPT] = true; // Hide accept->acceptEod edge.
     calcAndStoreDepth<RevNFAGraph, NFAVertexRevDepth>(
-        g, rg, g.acceptEod, deadNodes, dMin, dMax, depths,
+        rg, g.acceptEod, deadNodes, dMin, dMax, depths,
         &NFAVertexRevDepth::toAcceptEod);
+
+    return depths;
 }
 
-void calcDepths(const NGHolder &g, vector<NFAVertexBidiDepth> &depths) {
+vector<NFAVertexBidiDepth> calcBidiDepths(const NGHolder &g) {
     assert(hasCorrectlyNumberedVertices(g));
     const size_t numVertices = num_vertices(g);
-    depths.clear();
-    depths.resize(numVertices);
 
+    vector<NFAVertexBidiDepth> depths(numVertices);
     vector<int> dMin;
     vector<int> dMax;
 
@@ -339,53 +347,52 @@ void calcDepths(const NGHolder &g, vector<NFAVertexBidiDepth> &depths) {
      * create a filtered graph for max depth calculations: all nodes/edges
      * reachable from a loop need to be removed
      */
-    vector<bool> deadNodes(numVertices);
-    findLoopReachable(g.g, g.start, deadNodes);
+    auto deadNodes = findLoopReachable(g, g.start);
 
     DEBUG_PRINTF("doing start\n");
-    calcAndStoreDepth<NFAGraph, NFAVertexBidiDepth>(
-        g, g.g, g.start, deadNodes, dMin, dMax, depths,
+    calcAndStoreDepth<NGHolder, NFAVertexBidiDepth>(
+        g, g.start, deadNodes, dMin, dMax, depths,
         &NFAVertexBidiDepth::fromStart);
     DEBUG_PRINTF("doing startds\n");
-    calcAndStoreDepth<NFAGraph, NFAVertexBidiDepth>(
-        g, g.g, g.startDs, deadNodes, dMin, dMax, depths,
+    calcAndStoreDepth<NGHolder, NFAVertexBidiDepth>(
+        g, g.startDs, deadNodes, dMin, dMax, depths,
         &NFAVertexBidiDepth::fromStartDotStar);
 
     /* Now go backwards */
-    typedef reverse_graph<NFAGraph, const NFAGraph&> RevNFAGraph;
-    const RevNFAGraph rg(g.g);
-    deadNodes.assign(numVertices, false);
-    findLoopReachable(rg, g.acceptEod, deadNodes);
+    typedef reverse_graph<NGHolder, const NGHolder &> RevNFAGraph;
+    const RevNFAGraph rg(g);
+    deadNodes = findLoopReachable(rg, g.acceptEod);
 
     DEBUG_PRINTF("doing accept\n");
     calcAndStoreDepth<RevNFAGraph, NFAVertexBidiDepth>(
-        g, rg, g.accept, deadNodes, dMin, dMax, depths,
+        rg, g.accept, deadNodes, dMin, dMax, depths,
         &NFAVertexBidiDepth::toAccept);
     DEBUG_PRINTF("doing accepteod\n");
     deadNodes[NODE_ACCEPT] = true; // Hide accept->acceptEod edge.
     calcAndStoreDepth<RevNFAGraph, NFAVertexBidiDepth>(
-        g, rg, g.acceptEod, deadNodes, dMin, dMax, depths,
+        rg, g.acceptEod, deadNodes, dMin, dMax, depths,
         &NFAVertexBidiDepth::toAcceptEod);
+
+    return depths;
 }
 
-void calcDepthsFrom(const NGHolder &g, const NFAVertex src,
-                    vector<DepthMinMax> &depths) {
+vector<DepthMinMax> calcDepthsFrom(const NGHolder &g, const NFAVertex src) {
     assert(hasCorrectlyNumberedVertices(g));
     const size_t numVertices = num_vertices(g);
 
-    vector<bool> deadNodes(numVertices);
-    findLoopReachable(g.g, g.start, deadNodes);
+    auto deadNodes = findLoopReachable(g, g.start);
 
     vector<int> dMin, dMax;
-    calcDepthFromSource(g, g.g, src, deadNodes, dMin, dMax);
+    calcDepthFromSource(g, src, deadNodes, dMin, dMax);
 
-    depths.clear();
-    depths.resize(numVertices);
+    vector<DepthMinMax> depths(numVertices);
 
     for (auto v : vertices_range(g)) {
-        u32 idx = g[v].index;
+        auto idx = g[v].index;
         depths.at(idx) = getDepths(idx, dMin, dMax);
     }
+
+    return depths;
 }
 
 } // namespace ue2

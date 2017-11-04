@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2016, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -76,9 +76,6 @@
 #define storeu_u32(ptr, a)   unaligned_store_u32(ptr, a)
 #define storeu_u64a(ptr, a)  unaligned_store_u64a(ptr, a)
 #define storeu_m128(ptr, a)  storeu128(ptr, a)
-#define storeu_m256(ptr, a)  storeu256(ptr, a)
-#define storeu_m384(ptr, a)  storeu384(ptr, a)
-#define storeu_m512(ptr, a)  storeu512(ptr, a)
 
 #define zero_u8             0
 #define zero_u32            0
@@ -128,12 +125,12 @@
 #define andnot_m384(a, b)   (andnot384(a, b))
 #define andnot_m512(a, b)   (andnot512(a, b))
 
-#define shift_u32(a, b)     ((a) << (b))
-#define shift_u64a(a, b)    ((a) << (b))
-#define shift_m128(a, b)    (shift128(a, b))
-#define shift_m256(a, b)    (shift256(a, b))
-#define shift_m384(a, b)    (shift384(a, b))
-#define shift_m512(a, b)    (shift512(a, b))
+#define lshift_u32(a, b)    ((a) << (b))
+#define lshift_u64a(a, b)   ((a) << (b))
+#define lshift_m128(a, b)   (lshift64_m128(a, b))
+#define lshift_m256(a, b)   (lshift64_m256(a, b))
+#define lshift_m384(a, b)   (lshift64_m384(a, b))
+#define lshift_m512(a, b)   (lshift64_m512(a, b))
 
 #define isZero_u8(a)        ((a) == 0)
 #define isZero_u32(a)       ((a) == 0)
@@ -183,44 +180,52 @@
 #define partial_load_m384(ptr, sz) loadbytes384(ptr, sz)
 #define partial_load_m512(ptr, sz) loadbytes512(ptr, sz)
 
-#define store_compressed_u32(ptr, x, m)     storecompressed32(ptr, x, m)
-#define store_compressed_u64a(ptr, x, m)    storecompressed64(ptr, x, m)
-#define store_compressed_m128(ptr, x, m)    storecompressed128(ptr, x, m)
-#define store_compressed_m256(ptr, x, m)    storecompressed256(ptr, x, m)
-#define store_compressed_m384(ptr, x, m)    storecompressed384(ptr, x, m)
-#define store_compressed_m512(ptr, x, m)    storecompressed512(ptr, x, m)
+#define store_compressed_u32(ptr, x, m, len)  storecompressed32(ptr, x, m, len)
+#define store_compressed_u64a(ptr, x, m, len) storecompressed64(ptr, x, m, len)
+#define store_compressed_m128(ptr, x, m, len) storecompressed128(ptr, x, m, len)
+#define store_compressed_m256(ptr, x, m, len) storecompressed256(ptr, x, m, len)
+#define store_compressed_m384(ptr, x, m, len) storecompressed384(ptr, x, m, len)
+#define store_compressed_m512(ptr, x, m, len) storecompressed512(ptr, x, m, len)
 
-#define load_compressed_u32(x, ptr, m)      loadcompressed32(x, ptr, m)
-#define load_compressed_u64a(x, ptr, m)     loadcompressed64(x, ptr, m)
-#define load_compressed_m128(x, ptr, m)     loadcompressed128(x, ptr, m)
-#define load_compressed_m256(x, ptr, m)     loadcompressed256(x, ptr, m)
-#define load_compressed_m384(x, ptr, m)     loadcompressed384(x, ptr, m)
-#define load_compressed_m512(x, ptr, m)     loadcompressed512(x, ptr, m)
+#define load_compressed_u32(x, ptr, m, len)   loadcompressed32(x, ptr, m, len)
+#define load_compressed_u64a(x, ptr, m, len)  loadcompressed64(x, ptr, m, len)
+#define load_compressed_m128(x, ptr, m, len)  loadcompressed128(x, ptr, m, len)
+#define load_compressed_m256(x, ptr, m, len)  loadcompressed256(x, ptr, m, len)
+#define load_compressed_m384(x, ptr, m, len)  loadcompressed384(x, ptr, m, len)
+#define load_compressed_m512(x, ptr, m, len)  loadcompressed512(x, ptr, m, len)
 
-static really_inline void clearbit_u32(u32 *p, u32 n) {
+static really_inline
+void clearbit_u32(u32 *p, u32 n) {
     assert(n < sizeof(*p) * 8);
     *p &= ~(1U << n);
 }
-static really_inline void clearbit_u64a(u64a *p, u32 n) {
+
+static really_inline
+void clearbit_u64a(u64a *p, u32 n) {
     assert(n < sizeof(*p) * 8);
     *p &= ~(1ULL << n);
 }
+
 #define clearbit_m128(ptr, n)   (clearbit128(ptr, n))
 #define clearbit_m256(ptr, n)   (clearbit256(ptr, n))
 #define clearbit_m384(ptr, n)   (clearbit384(ptr, n))
 #define clearbit_m512(ptr, n)   (clearbit512(ptr, n))
 
-static really_inline char testbit_u32(const u32 *p, u32 n) {
-    assert(n < sizeof(*p) * 8);
-    return !!(*p & (1U << n));
+static really_inline
+char testbit_u32(u32 val, u32 n) {
+    assert(n < sizeof(val) * 8);
+    return !!(val & (1U << n));
 }
-static really_inline char testbit_u64a(const u64a *p, u32 n) {
-    assert(n < sizeof(*p) * 8);
-    return !!(*p & (1ULL << n));
+
+static really_inline
+char testbit_u64a(u64a val, u32 n) {
+    assert(n < sizeof(val) * 8);
+    return !!(val & (1ULL << n));
 }
-#define testbit_m128(ptr, n)    (testbit128(ptr, n))
-#define testbit_m256(ptr, n)    (testbit256(ptr, n))
-#define testbit_m384(ptr, n)    (testbit384(ptr, n))
-#define testbit_m512(ptr, n)    (testbit512(ptr, n))
+
+#define testbit_m128(val, n)    (testbit128(val, n))
+#define testbit_m256(val, n)    (testbit256(val, n))
+#define testbit_m384(val, n)    (testbit384(val, n))
+#define testbit_m512(val, n)    (testbit512(val, n))
 
 #endif

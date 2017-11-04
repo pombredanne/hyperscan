@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -31,6 +31,7 @@
 
 #include "ue2common.h"
 #include "hwlm/hwlm_literal.h"
+#include "util/bytecode_ptr.h"
 
 #include <map>
 #include <utility>
@@ -44,7 +45,6 @@ namespace ue2 {
 // a pile of decorative typedefs
 // good for documentation purposes more than anything else
 typedef u32 LiteralIndex;
-typedef u32 ConfirmIndex;
 typedef u32 SuffixPositionInString; // zero is last byte, counting back
                                     // into the string
 typedef u32 BucketIndex;
@@ -55,26 +55,25 @@ typedef u32 PositionInBucket;  // zero is 'we are matching right now!",
 class EngineDescription;
 class FDREngineDescription;
 struct hwlmStreamingControl;
+struct Grey;
 
-size_t getFDRConfirm(const std::vector<hwlmLiteral> &lits, FDRConfirm **fdrc_p,
-                     bool make_small);
-
-std::pair<u8 *, size_t> setupFullMultiConfs(
-    const std::vector<hwlmLiteral> &lits, const EngineDescription &eng,
-    std::map<BucketIndex, std::vector<LiteralIndex> > &bucketToLits,
-    bool make_small);
+bytecode_ptr<u8> setupFullConfs(
+      const std::vector<hwlmLiteral> &lits,
+      const EngineDescription &eng,
+      const std::map<BucketIndex, std::vector<LiteralIndex>> &bucketToLits,
+      bool make_small);
 
 // all suffixes include an implicit max_bucket_width suffix to ensure that
 // we always read a full-scale flood "behind" us in terms of what's in our
 // state; if we don't have a flood that's long enough we won't be in the
 // right state yet to allow blindly advancing
-std::pair<u8 *, size_t>
-setupFDRFloodControl(const std::vector<hwlmLiteral> &lits,
-                     const EngineDescription &eng);
+bytecode_ptr<u8> setupFDRFloodControl(const std::vector<hwlmLiteral> &lits,
+                                      const EngineDescription &eng,
+                                      const Grey &grey);
 
-std::pair<u8 *, size_t>
+bytecode_ptr<u8>
 fdrBuildTableStreaming(const std::vector<hwlmLiteral> &lits,
-                       hwlmStreamingControl *stream_control);
+                       hwlmStreamingControl &stream_control);
 
 static constexpr u32 HINT_INVALID = 0xffffffff;
 

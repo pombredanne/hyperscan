@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -48,67 +48,11 @@ typedef u64a rose_group;
 #define MAX_DELAY                   (DELAY_SLOT_COUNT - 1)
 #define DELAY_MASK                  (DELAY_SLOT_COUNT - 1)
 
-#define DELAY_FLOAT_DIRTY      (1U << 7) /* delay literal matched in history */
-
-// Direct report stuff
-#define LITERAL_DR_FLAG   (1U << 31)
-#define LITERAL_MDR_FLAG  ((1U << 30) | (1U << 31))
-
-/** \brief True if literal is either a direct report or a multi-direct report.
- * */
-static really_inline
-u32 isLiteralDR(u32 id) {
-    return id & LITERAL_DR_FLAG;
-}
-
-static really_inline
-u32 isLiteralMDR(u32 id) {
-    return (id & LITERAL_MDR_FLAG) == LITERAL_MDR_FLAG;
-}
-
-static really_inline
-ReportID literalToReport(u32 id) {
-    assert(id & LITERAL_DR_FLAG);
-    assert(!(id & (LITERAL_MDR_FLAG ^ LITERAL_DR_FLAG)));
-    return id & ~LITERAL_DR_FLAG;
-}
-
-// Structure representing a literal. Each literal may have many roles.
-struct RoseLiteral {
-    u32 rootRoleOffset; /**< If rootRoleCount == 1, this is an offset relative
-                         * to the rose engine to the root role associated with
-                         * the literal.
-                         * If rootRoleCount > 1, this is the first index into
-                         * the rootRoleTable indicating the root roles.
-                         */
-    u32 rootRoleCount; // number of root roles
-    u32 iterOffset; // offset of sparse iterator, relative to rose
-    u32 iterMapOffset; // offset of the iter mapping table, relative to rose
-    rose_group groups; // bitset of groups that cause this literal to fire.
-    u8 minDepth; // the minimum of this literal's roles' depths (for depths > 1)
-    u8 squashesGroup; /**< literal switches off its group behind it if it sets a
-                       * role */
-    u8 requires_side; // need to catch up sidecar for this literal
-    u32 delay_mask; /**< bit set indicates that the literal inserts a delayed
-                     * match at the given offset */
-    u32 delayIdsOffset; // offset to array of ids to poke in the delay structure
-};
-
-/* properties for sidecar entries, yay */
-struct RoseSide {
-    u32 squashIterOffset; // offset of the squash sparse iterator, rose relative
-    rose_group squashGroupMask; // squash literal squash masks
-};
-
 /* Allocation of Rose literal ids
  *
  * The rose literal id space is segmented:
  *
  * ---- 0
- * |  | Normal undelayed literals in the e, or f tables which require a
- * |  | manual benefits confirm on match [a table never requires benefits]
- * |  |
- * ---- nonbenefits_base_id
  * |  | 'Normal' undelayed literals in either e or f tables
  * |  |
  * |  |
@@ -120,31 +64,19 @@ struct RoseSide {
  * |  | Delayed version of normal literals
  * |  |
  * ---- literalCount
- * ...
- * ...
- * ...
- * ---- LITERAL_DR_FLAG
- * |  | Direct Report literals: immediately raise an internal report with id
- * |  | given by (lit_id & ~LITERAL_DR_FLAG). Raised by a or f tables (or e??).
- * |  | No RoseLiteral structure
- * |  |
- * |  |
- * ----
- *
- * Note: sidecar 'literals' are in a complete separate space
  */
 
 /* Rose Literal Sources
  *
- * Rose currently gets events (mainly roseProcessMatch calls) from 8 sources:
+ * Rose currently gets events (mainly roseProcessMatch calls) from a number of
+ * sources:
  * 1) The floating table
  * 2) The anchored table
  * 3) Delayed literals
- * 4) Sidecar literal matcher
- * 5) suffixes NFAs
- * 6) masksv2 (literals with benefits)
- * 7) End anchored table
- * 8) prefix / infix nfas
+ * 4) Suffix NFAs
+ * 5) Literal masks
+ * 5) End anchored table
+ * 6) Prefix / Infix nfas
  *
  * Care is required to ensure that events appear to come into Rose in order
  * (or sufficiently ordered for Rose to cope). Generally the progress of the
@@ -162,19 +94,12 @@ struct RoseSide {
  * Delayed literal ordering is handled by delivering any pending delayed
  * literals before processing any floating match.
  *
- * Sidecar:
- * The sidecar matcher is unique in that it does not return match
- * location information. Sidecar literals are escapes between two normal
- * roles. The sidecar matcher is caught up to the floating matcher
- * before any possible predecessor role, any possible successor role, and
- * at stream boundaries^3.
- *
  * Suffix:
  * Suffixes are always pure terminal roles. Prior to raising a match^2, pending
  * NFA queues are run to the current point (floating or delayed literal) as
  * appropriate.
  *
- * Maskv2:
+ * Literal Masks:
  * These are triggered from either floating literals or delayed literals and
  * inspect the data behind them. Matches are raised at the same location as the
  * trigger literal so there are no ordering issues. Masks are always pure
@@ -202,15 +127,6 @@ struct RoseSide {
  *    terminals.
  */
 
-// We have different types of role history storage.
-enum RoseRoleHistory {
-    ROSE_ROLE_HISTORY_NONE, // I'm sorry, I don't recall.
-    ROSE_ROLE_HISTORY_ANCH, // used when previous role is at a fixed offset
-    ROSE_ROLE_HISTORY_LAST_BYTE, /* used when previous role can only match at the
-                                  * last byte of a stream */
-    ROSE_ROLE_HISTORY_INVALID // history not yet assigned
-};
-
 struct RoseCountingMiracle {
     char shufti; /** 1: count shufti class; 0: count a single character */
     u8 count; /** minimum number of occurrences for the counting
@@ -228,16 +144,10 @@ struct LeftNfaInfo {
     u32 stopTable; // stop table index, or ROSE_OFFSET_INVALID
     u8 transient; /**< 0 if not transient, else max width of transient prefix */
     char infix; /* TODO: make flags */
+    char eager; /**< nfa should be run eagerly to first match or death */
     char eod_check; /**< nfa is used by the event eod literal */
     u32 countingMiracleOffset; /** if not 0, offset to RoseCountingMiracle. */
     rose_group squash_mask; /* & mask applied when rose nfa dies */
-};
-
-// A list of these is used to trigger prefix/infix roses.
-struct RoseTrigger {
-    u32 queue; // queue index of leftfix
-    u32 event; // queue event, from MQE_*
-    u8 cancel_prev_top;
 };
 
 struct NfaInfo {
@@ -246,51 +156,12 @@ struct NfaInfo {
     u32 fullStateOffset; /* offset in scratch, relative to ??? */
     u32 ekeyListOffset; /* suffix, relative to base of rose, 0 if no ekeys */
     u8 no_retrigger; /* TODO */
-    u8 only_external; /**< does not raise any som internal events or chained
-                       * rose events */
     u8 in_sbmatcher;  /**< this outfix should not be run in small-block
                        * execution, as it will be handled by the sbmatcher
                        * HWLM table. */
     u8 eod; /* suffix is triggered by the etable --> can only produce eod
              * matches */
 };
-
-#define ROSE_ROLE_FLAG_ANCHOR_TABLE  (1U << 0)  /**< role is triggered from
-                                                 * anchored table */
-#define ROSE_ROLE_FLAG_ACCEPT_EOD    (1U << 2)  /**< "fake" role, fires callback
-                                                 * at EOD */
-#define ROSE_ROLE_FLAG_ONLY_AT_END   (1U << 3)  /**< role can only be switched on
-                                                 * at end of block */
-#define ROSE_ROLE_FLAG_PRED_OF_EOD   (1U << 4)  /**< eod is a successor literal
-                                                 * of the role */
-#define ROSE_ROLE_FLAG_EOD_TABLE     (1U << 5)  /**< role is triggered from eod
-                                                 * table */
-#define ROSE_ROLE_FLAG_ROSE          (1U << 6)  /**< rose style prefix nfa for
-                                                 * role */
-#define ROSE_ROLE_FLAG_SOM_REPORT    (1U << 7)  /**< report id is only used to
-                                                 * manipulate som */
-#define ROSE_ROLE_FLAG_REPORT_START  (1U << 8)  /**< som som som som */
-#define ROSE_ROLE_FLAG_CHAIN_REPORT  (1U << 9)  /**< report id is only used to
-                                                 * start an outfix engine */
-#define ROSE_ROLE_FLAG_SOM_ADJUST    (1U << 10) /**< som value to use is offset
-                                                 * from match end location */
-#define ROSE_ROLE_FLAG_SOM_ROSEFIX   (1U << 11) /**< som value to use is provided
-                                                 * by prefix/infix */
-
-/* We allow different types of role-predecessor relationships. These are stored
- * in with the flags */
-#define ROSE_ROLE_PRED_NONE         (1U << 20) /**< the only pred is the root,
-                                                * [0, inf] bounds */
-#define ROSE_ROLE_PRED_SIMPLE       (1U << 21) /**< single [0,inf] pred, no
-                                                * offset tracking */
-#define ROSE_ROLE_PRED_ROOT         (1U << 22) /**< pred is root or anchored
-                                                * root, and we have bounds */
-#define ROSE_ROLE_PRED_ANY          (1U << 23) /**< any of our preds can match */
-
-#define ROSE_ROLE_PRED_CLEAR_MASK (~(ROSE_ROLE_PRED_NONE       \
-                                    | ROSE_ROLE_PRED_SIMPLE    \
-                                    | ROSE_ROLE_PRED_ROOT      \
-                                    | ROSE_ROLE_PRED_ANY))
 
 #define MAX_STORED_LEFTFIX_LAG 127 /* max leftfix lag that we can store in one
                                     * whole byte (OWB) (streaming only). Other
@@ -299,55 +170,11 @@ struct NfaInfo {
 #define OWB_ZOMBIE_ALWAYS_YES 128 /* nfa will always answer yes to any rose
                                    * prefix checks */
 
-// Structure representing a literal role.
-struct RoseRole {
-    u32 flags;
-    u32 predOffset; // either offset of pred sparse iterator, or
-                    // (for ROSE_ROLE_PRED_ROOT) index of single RosePred.
-    rose_group groups; /**< groups to enable when role is set (groups of succ
-                        *  literals) */
-    ReportID reportId; // report ID, or MO_INVALID_IDX
-    u32 stateIndex; /**< index into state multibit, or MMB_INVALID. Roles do not
-                     * require a state bit if they are terminal */
-    u32 suffixEvent; // queue event, from MQE_
-    u8 depth; /**< depth of this vertex from root in the tree, or 255 if greater.
-               */
-    u32 suffixOffset; /**< suffix nfa: 0 if no suffix associated with the role,
-                       *  relative to base of the rose. */
-    ReportID leftfixReport; // (pre|in)fix report to check, or MO_INVALID_IDX.
-    u32 leftfixLag; /**< distance behind match where we need to check the
-                     * leftfix engine status */
-    u32 leftfixQueue; /**< queue index of the prefix/infix before role */
-    u32 infixTriggerOffset; /* offset to list of infix roses to trigger */
-    u32 sidecarEnableOffset; /**< offset to list of sidecar literals to enable
-                              */
-    u32 somAdjust; /**< som for the role is offset from end match offset */
+/* offset of the status flags in the stream state. */
+#define ROSE_STATE_OFFSET_STATUS_FLAGS 0
 
-    u32 lookaroundIndex; /**< index of lookaround offset/reach in table, or
-                          * MO_INVALID_IDX. */
-    u32 lookaroundCount; /**< number of lookaround entries. */
-};
-
-// Structure representing a predecessor relationship
-struct RosePred {
-    u32 role; // index of predecessor role
-    u32 minBound; // min bound on distance from pred (_ANCH ->absolute offset)
-    u32 maxBound; /* max bound on distance from pred, or ROSE_BOUND_INF
-                   * (_ANCH -> absolute offset ) */
-    u8 historyCheck; // from enum RoseRoleHistory
-};
-
-// Structure mapping between the dense index produced by the literal sparse
-// iterator and a list of roles.
-struct RoseIterMapping {
-    u32 offset; // offset into iter role table
-    u32 count; // number of roles
-};
-
-struct RoseIterRole {
-    u32 role;
-    u32 pred;
-};
+/* offset of role mmbit in stream state (just after the status flag byte). */
+#define ROSE_STATE_OFFSET_ROLE_MMBIT   sizeof(u8)
 
 /**
  * \brief Rose state offsets.
@@ -357,36 +184,34 @@ struct RoseIterRole {
  *
  * State not covered by this structure includes:
  *
- * -# the RoseRuntimeState structure
+ * -# the first byte, containing the status bitmask
  * -# the role state multibit
  */
 struct RoseStateOffsets {
     /** History buffer.
      *
-     * First byte is an 8-bit count of the number of valid history bytes
-     * available, followed by the history itself. Max size of history is
-     * RoseEngine::historyRequired. */
+     * Max size of history is RoseEngine::historyRequired. */
     u32 history;
 
-    /** Exhausted bitvector.
+    /** Exhausted multibit.
      *
-     * 1 bit per exhaustible key (used by Highlander mode). If a bit is set,
+     * entry per exhaustible key (used by Highlander mode). If a bit is set,
      * reports with that ekey should not be delivered to the user. */
     u32 exhausted;
 
-    /** Sidecar state. */
-    u32 sidecar;
-
-    /** Size of sidecar state, in bytes. */
-    u32 sidecar_size;
+    /** size of exhausted multibit */
+    u32 exhausted_size;
 
     /** Multibit for active suffix/outfix engines. */
     u32 activeLeafArray;
 
-    /** Multibit for active Rose (prefix/infix) engines. */
+    /** Size of multibit for active suffix/outfix engines in bytes. */
+    u32 activeLeafArray_size;
+
+    /** Multibit for active leftfix (prefix/infix) engines. */
     u32 activeLeftArray;
 
-    /** Size of the active Rose array multibit, in bytes. */
+    /** Size of multibit for active leftfix (prefix/infix) engines in bytes. */
     u32 activeLeftArray_size;
 
     /** Table of lag information (stored as one byte per engine) for active
@@ -402,8 +227,11 @@ struct RoseStateOffsets {
     /** Size of packed Rose groups value, in bytes. */
     u32 groups_size;
 
-    /** State for floating literal matcher (managed by HWLM). */
-    u32 floatingMatcherState;
+    /** State for long literal support. */
+    u32 longLitState;
+
+    /** Size of the long literal state. */
+    u32 longLitState_size;
 
     /** Packed SOM location slots. */
     u32 somLocation;
@@ -414,19 +242,29 @@ struct RoseStateOffsets {
     /** Multibit guarding SOM location slots. */
     u32 somWritable;
 
+    /** Size of each of the somValid and somWritable multibits, in bytes. */
+    u32 somMultibit_size;
+
+    /** Begin of the region where NFA engine state is stored.
+     * The NFA state region extends to end. */
+    u32 nfaStateBegin;
+
     /** Total size of Rose state, in bytes. */
     u32 end;
 };
 
 struct RoseBoundaryReports {
-    u32 reportEodOffset; /**< 0 if no reports lits, otherwise offset of
-                          * MO_INVALID_IDX terminated list to report at EOD */
-    u32 reportZeroOffset; /**< 0 if no reports lits, otherwise offset of
-                           * MO_INVALID_IDX terminated list to report at offset
-                           * 0 */
-    u32 reportZeroEodOffset; /**< 0 if no reports lits, otherwise offset of
-                              * MO_INVALID_IDX terminated list to report if eod
-                              * is at offset 0. Superset of other lists. */
+    /** \brief 0 if no reports list, otherwise offset of program to run to
+     * deliver reports at EOD. */
+    u32 reportEodOffset;
+
+    /** \brief 0 if no reports list, otherwise offset of program to run to
+     * deliver reports at offset 0. */
+    u32 reportZeroOffset;
+
+    /** \brief 0 if no reports list, otherwise offset of program to run to
+     * deliver reports if EOD is at offset 0. Superset of other programs. */
+    u32 reportZeroEodOffset;
 };
 
 /* NFA Queue Assignment
@@ -456,33 +294,27 @@ struct RoseBoundaryReports {
 #define ROSE_RUNTIME_PURE_LITERAL  1
 #define ROSE_RUNTIME_SINGLE_OUTFIX 2
 
-// Runtime structure header for Rose.
-// In memory, we follow this with:
-//   1a. anchored 'literal' matcher table
-//   1b. floating literal matcher table
-//   1c. sidecar 'literal' matcher table
-//   1d. eod-anchored literal matcher table
-//   1e. small block table
-//   2. array of RoseLiteral (literalCount entries)
-//   3. array of RoseRole (roleCount entries)
-//   4. array of RosePred (predCount entries)
-//   8. array of NFA offsets, one per queue
-//   9. array of state offsets, one per queue (+)
-//  10. array of role ids for the set of all root roles
-//  12. multi-direct report array
-/*
+/**
+ * \brief Runtime structure header for Rose.
+ *
+ * Runtime structure header for Rose.
+ * In memory, we follow this with:
+ *   -# the "engine blob"
+ *   -# anchored 'literal' matcher table
+ *   -# floating literal matcher table
+ *   -# eod-anchored literal matcher table
+ *   -# small block table
+ *   -# array of NFA offsets, one per queue
+ *   -# array of state offsets, one per queue (+)
+ *
  *  (+) stateOffset array note: Offsets in the array are either into the stream
  *  state (normal case) or into the tstate region of scratch (for transient rose
  *  nfas). Rose nfa info table can distinguish the cases.
  */
 struct RoseEngine {
-    u8  hasFloatingDirectReports; // has at least one floating direct report literal
     u8  noFloatingRoots; /* only need to run the anchored table if something
                           * matched in the anchored table */
     u8  requiresEodCheck; /* stuff happens at eod time */
-    u8  requiresEodSideCatchup; /* we need to do a sidecar catchup before eod
-                                 * checks */
-    u8  hasEodEventLiteral; // fires a ROSE_EVENT literal at eod time.
     u8  hasOutfixesInSmallBlock; /**< has at least one outfix that must run even
                                     in small block scans. */
     u8  runtimeImpl; /**< can we just run the floating table or a single outfix?
@@ -492,20 +324,19 @@ struct RoseEngine {
     u8  hasSom; /**< has at least one pattern which tracks SOM. */
     u8  somHorizon; /**< width in bytes of SOM offset storage (governed by
                         SOM precision) */
-    u8  simpleCallback; /**< has only external reports with no bounds checks,
-                             plus no exhaustion keys */
     u32 mode; /**< scanning mode, one of HS_MODE_{BLOCK,STREAM,VECTORED} */
     u32 historyRequired; /**< max amount of history required for streaming */
     u32 ekeyCount; /**< number of exhaustion keys */
     u32 dkeyCount; /**< number of dedupe keys */
+    u32 dkeyLogSize; /**< size of fatbit for storing dkey log (bytes) */
     u32 invDkeyOffset; /**< offset to table mapping from dkeys to the external
                          *  report ids */
     u32 somLocationCount; /**< number of som locations required */
+    u32 somLocationFatbitSize; /**< size of SOM location fatbit (bytes) */
     u32 rolesWithStateCount; // number of roles with entries in state bitset
     u32 stateSize; /* size of the state bitset
                     * WARNING: not the size of the rose state */
     u32 anchorStateSize; /* size of the state for the anchor dfas */
-    u32 nfaStateSize; /* total size of the state for the mask/rose nfas */
     u32 tStateSize; /* total size of the state for transient rose nfas */
     u32 scratchStateSize; /**< uncompressed state req'd for NFAs in scratch;
                            * used for sizing scratch only. */
@@ -513,8 +344,9 @@ struct RoseEngine {
     u32 amatcherOffset; // offset of the anchored literal matcher (bytes)
     u32 ematcherOffset; // offset of the eod-anchored literal matcher (bytes)
     u32 fmatcherOffset; // offset of the floating literal matcher (bytes)
-    u32 smatcherOffset; // offset of the sidecar literal matcher (bytes)
+    u32 drmatcherOffset; // offset of the delayed rebuild table (bytes)
     u32 sbmatcherOffset; // offset of the small-block literal matcher (bytes)
+    u32 longLitTableOffset; // offset of the long literal table
     u32 amatcherMinWidth; /**< minimum number of bytes required for a pattern
                            * involved with the anchored table to produce a full
                            * match. */
@@ -530,32 +362,48 @@ struct RoseEngine {
     u32 fmatcherMaxBiAnchoredWidth; /**< maximum number of bytes that can still
                                      * produce a match for a pattern involved
                                      * with the anchored table. */
-    u32 intReportOffset; /**< offset of array of internal_report structures */
-    u32 intReportCount; /**< number of internal_report structures */
-    u32 literalOffset; // offset of RoseLiteral array (bytes)
-    u32 literalCount; // number of RoseLiteral entries [NOT number of literals]
-    u32 sideOffset; /**< offset of RoseSide array (bytes), indexed by
-                     *sidecar ids */
-    u32 sideCount; /**< number of RoseSide entries */
-    u32 multidirectOffset; /**< offset of multi-direct report list. */
+
+    /**
+     * \brief Offset of u32 array of program offsets for reports used by
+     * output-exposed engines.
+     */
+    u32 reportProgramOffset;
+
+    /**
+     * \brief Number of programs for reports used by output-exposed engines.
+     */
+    u32 reportProgramCount;
+
+    /**
+     * \brief Offset of u32 array of program offsets for delayed replay of
+     * literals.
+     */
+    u32 delayProgramOffset;
+
+    /**
+     * \brief Offset of u32 array of program offsets for anchored literals.
+     */
+    u32 anchoredProgramOffset;
+
     u32 activeArrayCount; //number of nfas tracked in the active array
     u32 activeLeftCount; //number of nfas tracked in the active rose array
     u32 queueCount;      /**< number of nfa queues */
-    u32 roleOffset; // offset of RoseRole array (bytes)
-    u32 roleCount; // number of RoseRole entries
-    u32 predOffset; // offset of RosePred array (bytes)
-    u32 predCount; // number of RosePred entries
-    u32 rootRoleOffset;
-    u32 rootRoleCount;
+    u32 activeQueueArraySize; //!< size of fatbit for active queues (bytes)
+
+    u32 eagerIterOffset; /**< offset to sparse iter for eager prefixes or 0 if
+                          * none */
+
+    /** \brief Number of keys used by CHECK_SET_HANDLED instructions in role
+     * programs. */
+    u32 handledKeyCount;
+
+    /** \brief Size of the handled keys fatbit in scratch (bytes). */
+    u32 handledKeyFatbitSize;
 
     u32 leftOffset;
     u32 roseCount;
-    u32 lookaroundTableOffset; //!< base of lookaround offset list (of s8 values)
-    u32 lookaroundReachOffset; /**< base of lookaround reach bitvectors (32
-                                * bytes each) */
 
-    u32 eodIterOffset; // or 0 if no eod iterator
-    u32 eodIterMapOffset;
+    u32 eodProgramOffset; //!< EOD program, otherwise 0.
 
     u32 lastByteHistoryIterOffset; // if non-zero
 
@@ -575,27 +423,17 @@ struct RoseEngine {
     u32 floatingMinDistance; /* start of region to run floating table over */
     u32 smallBlockDistance; /* end of region to run the floating table over
                                ROSE_BOUND_INF if not bounded */
-    u32 maxSafeAnchoredDROffset; /* the maximum offset that we can safely raise
-                                  * a direct report from the anchored table
-                                  * without delaying it */
     u32 floatingMinLiteralMatchOffset; /* the minimum offset that we can get a
                                         * 'valid' match from the floating
                                         * table */
     u32 nfaInfoOffset; /* offset to the nfa info offset array */
-    u32 anchoredReportMapOffset; /* am_log index --> reportid */
-    u32 anchoredReportInverseMapOffset; /*  reportid --> am_log index */
     rose_group initialGroups;
+    rose_group floating_group_mask; /* groups that are used by the ftable */
     u32 size; // (bytes)
-    u32 anchoredMatches; /* number of anchored roles generating matches */
     u32 delay_count; /* number of delayed literal ids. */
-    u32 delay_slot_size; /* size of delay slot mmbit. */
-    u32 delay_base_id; /* literal id of the first delayed literal.
-                        * delayed literal ids are contiguous */
+    u32 delay_fatbit_size; //!< size of each delay fatbit in scratch (bytes)
     u32 anchored_count; /* number of anchored literal ids */
-    u32 anchored_base_id; /* literal id of the first literal in the A table.
-                           * anchored literal ids are contiguous */
-    u32 nonbenefits_base_id; /* first literal id without benefit conf.
-                              * contiguous, blah, blah */
+    u32 anchored_fatbit_size; //!< size of each anch fatbit in scratch (bytes)
     u32 maxFloatingDelayedMatch; /* max offset that a delayed literal can
                                   * usefully be reported */
     u32 delayRebuildLength; /* length of the history region which needs to be
@@ -605,7 +443,6 @@ struct RoseEngine {
     struct RoseBoundaryReports boundary;
     u32 totalNumLiterals; /* total number of literals including dr */
     u32 asize; /* size of the atable */
-    u32 initSideEnableOffset; /* sidecar literals enabled initially */
     u32 outfixBeginQueue; /* first outfix queue */
     u32 outfixEndQueue; /* one past the last outfix queue */
     u32 leftfixBeginQueue; /* first prefix/infix queue */
@@ -613,49 +450,83 @@ struct RoseEngine {
     u32 rosePrefixCount; /* number of rose prefixes */
     u32 activeLeftIterOffset; /* mmbit_sparse_iter over non-transient roses */
     u32 ematcherRegionSize; /* max region size to pass to ematcher */
-    u32 literalBenefitsOffsets; /* offset to array of benefits indexed by lit
-                                   id */
     u32 somRevCount; /**< number of som reverse nfas */
     u32 somRevOffsetOffset; /**< offset to array of offsets to som rev nfas */
-    u32 nfaRegionBegin; /* start of the nfa region, debugging only */
-    u32 nfaRegionEnd; /* end of the nfa region, debugging only */
-    u32 group_weak_end; /* end of weak groups, debugging only */
-    u32 floatingStreamState; // size in bytes
-    u32 eodLiteralId; // literal ID for eod ROSE_EVENT if used, otherwise 0.
+    u32 longLitStreamState; // size in bytes
 
     struct scatter_full_plan state_init;
 };
-
-struct lit_benefits {
-    union {
-        u64a a64[MAX_MASK2_WIDTH/sizeof(u64a)];
-        u8 a8[MAX_MASK2_WIDTH];
-    } and_mask;
-    union {
-        u64a e64[MAX_MASK2_WIDTH/sizeof(u64a)];
-        u8 e8[MAX_MASK2_WIDTH];
-    } expected;
-};
-
-#if defined(_WIN32)
-#pragma pack(push, 1)
-#endif
-// Rose runtime state
-struct RoseRuntimeState {
-    u8 stored_depth; /* depth at stream boundary */
-    u8 flags; /* high bit true if delay rebuild needed */
-    u8 broken; /* user has requested that we stop matching */
-#if defined(_WIN32)
-};
-#pragma pack(pop)
-#else
-} __attribute__((packed));
-#endif
 
 struct ALIGN_CL_DIRECTIVE anchored_matcher_info {
     u32 next_offset; /* relative to this, 0 for end */
     u32 state_offset; /* relative to anchorState */
     u32 anchoredMinDistance; /* start of region to run anchored table over */
+};
+
+/**
+ * \brief Long literal subtable for a particular mode (caseful or nocase).
+ */
+struct RoseLongLitSubtable {
+    /**
+     * \brief Offset of the hash table (relative to RoseLongLitTable base).
+     *
+     * Offset is zero if no such table exists.
+     */
+    u32 hashOffset;
+
+    /**
+     * \brief Offset of the bloom filter (relative to RoseLongLitTable base).
+     *
+     * Offset is zero if no such table exists.
+     */
+    u32 bloomOffset;
+
+    /** \brief lg2 of the size of the hash table. */
+    u8 hashBits;
+
+    /** \brief Size of the bloom filter in bits. */
+    u8 bloomBits;
+
+    /** \brief Number of bits of packed stream state used.  */
+    u8 streamStateBits;
+};
+
+/**
+ * \brief Long literal table header.
+ */
+struct RoseLongLitTable {
+    /**
+     * \brief Total size of the whole table (including strings, bloom filters,
+     * hash tables).
+     */
+    u32 size;
+
+    /** \brief Caseful sub-table (hash table and bloom filter). */
+    struct RoseLongLitSubtable caseful;
+
+    /** \brief Caseless sub-table (hash table and bloom filter). */
+    struct RoseLongLitSubtable nocase;
+
+    /** \brief Total size of packed stream state in bytes. */
+    u8 streamStateBytes;
+
+    /** \brief Max length of literal prefixes. */
+    u8 maxLen;
+};
+
+/**
+ * \brief One of these structures per hash table entry in our long literal
+ * table.
+ */
+struct RoseLongLitHashEntry {
+    /**
+     * \brief Offset of the literal string itself, relative to
+     * RoseLongLitTable base. Zero if this bucket is empty.
+     */
+    u32 str_offset;
+
+    /** \brief Length of the literal string. */
+    u32 str_len;
 };
 
 static really_inline
@@ -684,28 +555,6 @@ const struct HWLM *getFLiteralMatcher(const struct RoseEngine *t) {
 }
 
 static really_inline
-const void *getSLiteralMatcher(const struct RoseEngine *t) {
-    if (!t->smatcherOffset) {
-        return NULL;
-    }
-
-    const char *st = (const char *)t + t->smatcherOffset;
-    assert(ISALIGNED_N(st, 8));
-    return st;
-}
-
-static really_inline
-const void *getELiteralMatcher(const struct RoseEngine *t) {
-    if (!t->ematcherOffset) {
-        return NULL;
-    }
-
-    const char *et = (const char *)t + t->ematcherOffset;
-    assert(ISALIGNED_N(et, 8));
-    return et;
-}
-
-static really_inline
 const void *getSBLiteralMatcher(const struct RoseEngine *t) {
     if (!t->sbmatcherOffset) {
         return NULL;
@@ -714,38 +563,6 @@ const void *getSBLiteralMatcher(const struct RoseEngine *t) {
     const char *matcher = (const char *)t + t->sbmatcherOffset;
     assert(ISALIGNED_N(matcher, 8));
     return matcher;
-}
-
-static really_inline
-const struct RoseLiteral *getLiteralTable(const struct RoseEngine *t) {
-    const struct RoseLiteral *tl
-        = (const struct RoseLiteral *)((const char *)t + t->literalOffset);
-    assert(ISALIGNED_N(tl, 4));
-    return tl;
-}
-
-static really_inline
-const struct RoseSide *getSideEntryTable(const struct RoseEngine *t) {
-    const struct RoseSide *rs
-        = (const struct RoseSide *)((const char *)t + t->sideOffset);
-    assert(ISALIGNED(rs));
-    return rs;
-}
-
-static really_inline
-const struct RoseRole *getRoleTable(const struct RoseEngine *t) {
-    const struct RoseRole *r
-        = (const struct RoseRole *)((const char *)t + t->roleOffset);
-    assert(ISALIGNED_N(r, 4));
-    return r;
-}
-
-static really_inline
-const struct RosePred *getPredTable(const struct RoseEngine *t) {
-    const struct RosePred *p
-        = (const struct RosePred *)((const char *)t + t->predOffset);
-    assert(ISALIGNED_N(p, 4));
-    return p;
 }
 
 static really_inline
@@ -765,20 +582,6 @@ const struct mmbit_sparse_iter *getActiveLeftIter(const struct RoseEngine *t) {
             ((const char *)t + t->activeLeftIterOffset);
     assert(ISALIGNED_N(it, 4));
     return it;
-}
-
-static really_inline
-const u32 *getRootRoleTable(const struct RoseEngine *t) {
-    const u32 *r = (const u32 *)((const char *)t + t->rootRoleOffset);
-    assert(ISALIGNED_N(r, 4));
-    return r;
-}
-
-static really_inline
-const struct lit_benefits *getLiteralBenefitsTable(
-                                              const struct RoseEngine *t) {
-    return (const struct lit_benefits *)
-        ((const char *)t + t->literalBenefitsOffsets);
 }
 
 static really_inline

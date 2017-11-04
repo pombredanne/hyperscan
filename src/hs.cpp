@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -39,9 +39,10 @@
 #include "compiler/error.h"
 #include "nfagraph/ng.h"
 #include "nfagraph/ng_expr_info.h"
-#include "parser/parse_error.h"
 #include "parser/Parser.h"
+#include "parser/parse_error.h"
 #include "parser/prefilter.h"
+#include "parser/unsupported.h"
 #include "util/compile_error.h"
 #include "util/cpuid_flags.h"
 #include "util/depth.h"
@@ -118,8 +119,9 @@ bool checkMode(unsigned int mode, hs_compile_error **comp_error) {
 
 static
 bool checkPlatform(const hs_platform_info *p, hs_compile_error **comp_error) {
-#define HS_TUNE_LAST HS_TUNE_FAMILY_BDW
-#define HS_CPU_FEATURES_ALL (HS_CPU_FEATURES_AVX2)
+    static constexpr u32 HS_TUNE_LAST = HS_TUNE_FAMILY_GLM;
+    static constexpr u32 HS_CPU_FEATURES_ALL =
+        HS_CPU_FEATURES_AVX2 | HS_CPU_FEATURES_AVX512;
 
     if (!p) {
         return true;
@@ -191,6 +193,14 @@ hs_compile_multi_int(const char *const *expressions, const unsigned *flags,
         return HS_COMPILER_ERROR;
     }
 
+#if defined(FAT_RUNTIME)
+    if (!check_ssse3()) {
+        *db = nullptr;
+        *comp_error = generateCompileError("Unsupported architecture", -1);
+        return HS_ARCH_ERROR;
+    }
+#endif
+
     if (!checkMode(mode, comp_error)) {
         *db = nullptr;
         assert(*comp_error); // set by checkMode.
@@ -217,10 +227,10 @@ hs_compile_multi_int(const char *const *expressions, const unsigned *flags,
     target_t target_info = platform ? target_t(*platform)
                                     : get_current_target();
 
-    CompileContext cc(isStreaming, isVectored, target_info, g);
-    NG ng(cc, somPrecision);
-
     try {
+        CompileContext cc(isStreaming, isVectored, target_info, g);
+        NG ng(cc, elements, somPrecision);
+
         for (unsigned int i = 0; i < elements; i++) {
             // Add this expression to the compiler
             try {
@@ -252,7 +262,7 @@ hs_compile_multi_int(const char *const *expressions, const unsigned *flags,
                                            e.hasIndex ? (int)e.index : -1);
         return HS_COMPILER_ERROR;
     }
-    catch (std::bad_alloc) {
+    catch (const std::bad_alloc &) {
         *db = nullptr;
         *comp_error = const_cast<hs_compile_error_t *>(&hs_enomem);
         return HS_COMPILER_ERROR;
@@ -268,9 +278,10 @@ hs_compile_multi_int(const char *const *expressions, const unsigned *flags,
 } // namespace ue2
 
 extern "C" HS_PUBLIC_API
-hs_error_t hs_compile(const char *expression, unsigned flags, unsigned mode,
-                      const hs_platform_info_t *platform, hs_database_t **db,
-                      hs_compile_error_t **error) {
+hs_error_t HS_CDECL hs_compile(const char *expression, unsigned flags,
+                               unsigned mode,
+                               const hs_platform_info_t *platform,
+                               hs_database_t **db, hs_compile_error_t **error) {
     if (expression == nullptr) {
         *db = nullptr;
         *error = generateCompileError("Invalid parameter: expression is NULL",
@@ -286,36 +297,45 @@ hs_error_t hs_compile(const char *expression, unsigned flags, unsigned mode,
 }
 
 extern "C" HS_PUBLIC_API
-hs_error_t hs_compile_multi(const char * const *expressions,
-                            const unsigned *flags, const unsigned *ids,
-                            unsigned elements, unsigned mode,
-                            const hs_platform_info_t *platform,
-                            hs_database_t **db, hs_compile_error_t **error) {
+hs_error_t HS_CDECL hs_compile_multi(const char *const *expressions,
+                                     const unsigned *flags, const unsigned *ids,
+                                     unsigned elements, unsigned mode,
+                                     const hs_platform_info_t *platform,
+                                     hs_database_t **db,
+                                     hs_compile_error_t **error) {
     const hs_expr_ext * const *ext = nullptr; // unused for this call.
     return hs_compile_multi_int(expressions, flags, ids, ext, elements, mode,
                                 platform, db, error, Grey());
 }
 
 extern "C" HS_PUBLIC_API
-hs_error_t hs_compile_ext_multi(const char * const *expressions,
-                                const unsigned *flags, const unsigned *ids,
-                                const hs_expr_ext * const *ext,
-                                unsigned elements, unsigned mode,
-                                const hs_platform_info_t *platform,
-                                hs_database_t **db,
-                                hs_compile_error_t **error) {
+hs_error_t HS_CDECL hs_compile_ext_multi(const char * const *expressions,
+                                     const unsigned *flags, const unsigned *ids,
+                                     const hs_expr_ext * const *ext,
+                                     unsigned elements, unsigned mode,
+                                     const hs_platform_info_t *platform,
+                                     hs_database_t **db,
+                                     hs_compile_error_t **error) {
     return hs_compile_multi_int(expressions, flags, ids, ext, elements, mode,
                                 platform, db, error, Grey());
 }
 
 static
 hs_error_t hs_expression_info_int(const char *expression, unsigned int flags,
-                                  unsigned int mode, hs_expr_info_t **info,
+                                  const hs_expr_ext_t *ext, unsigned int mode,
+                                  hs_expr_info_t **info,
                                   hs_compile_error_t **error) {
     if (!error) {
         // nowhere to write an error, but we can still return an error code.
         return HS_COMPILER_ERROR;
     }
+
+#if defined(FAT_RUNTIME)
+    if (!check_ssse3()) {
+        *error = generateCompileError("Unsupported architecture", -1);
+        return HS_ARCH_ERROR;
+    }
+#endif
 
     if (!info) {
         *error = generateCompileError("Invalid parameter: info is NULL", -1);
@@ -347,29 +367,39 @@ hs_error_t hs_expression_info_int(const char *expression, unsigned int flags,
         }
 
         ReportManager rm(cc.grey);
-        ParsedExpression pe(0, expression, flags, 0);
+        ParsedExpression pe(0, expression, flags, 0, ext);
         assert(pe.component);
 
         // Apply prefiltering transformations if desired.
-        if (pe.prefilter) {
+        if (pe.expr.prefilter) {
             prefilterTree(pe.component, ParseMode(flags));
         }
 
-        unique_ptr<NGWrapper> g = buildWrapper(rm, cc, pe);
+        // Expressions containing zero-width assertions and other extended pcre
+        // types aren't supported yet. This call will throw a ParseError
+        // exception if the component tree contains such a construct.
+        checkUnsupported(*pe.component);
+
+        pe.component->checkEmbeddedStartAnchor(true);
+        pe.component->checkEmbeddedEndAnchor(true);
+
+        auto built_expr = buildGraph(rm, cc, pe);
+        unique_ptr<NGHolder> &g = built_expr.g;
+        ExpressionInfo &expr = built_expr.expr;
 
         if (!g) {
             DEBUG_PRINTF("NFA build failed, but no exception was thrown.\n");
             throw ParseError("Internal error.");
         }
 
-        fillExpressionInfo(rm, *g, &local_info);
+        fillExpressionInfo(rm, cc, *g, expr, &local_info);
     }
     catch (const CompileError &e) {
         // Compiler error occurred
         *error = generateCompileError(e);
         return HS_COMPILER_ERROR;
     }
-    catch (std::bad_alloc) {
+    catch (std::bad_alloc &) {
         *error = const_cast<hs_compile_error_t *>(&hs_enomem);
         return HS_COMPILER_ERROR;
     }
@@ -391,15 +421,26 @@ hs_error_t hs_expression_info_int(const char *expression, unsigned int flags,
 }
 
 extern "C" HS_PUBLIC_API
-hs_error_t hs_expression_info(const char *expression, unsigned int flags,
-                              hs_expr_info_t **info,
-                              hs_compile_error_t **error) {
-    return hs_expression_info_int(expression, flags, HS_MODE_BLOCK, info,
+hs_error_t HS_CDECL hs_expression_info(const char *expression,
+                                       unsigned int flags,
+                                       hs_expr_info_t **info,
+                                       hs_compile_error_t **error) {
+    return hs_expression_info_int(expression, flags, nullptr, HS_MODE_BLOCK,
+                                  info, error);
+}
+
+extern "C" HS_PUBLIC_API
+hs_error_t HS_CDECL hs_expression_ext_info(const char *expression,
+                                           unsigned int flags,
+                                           const hs_expr_ext_t *ext,
+                                           hs_expr_info_t **info,
+                                           hs_compile_error_t **error) {
+    return hs_expression_info_int(expression, flags, ext, HS_MODE_BLOCK, info,
                                   error);
 }
 
 extern "C" HS_PUBLIC_API
-hs_error_t hs_populate_platform(hs_platform_info_t *platform) {
+hs_error_t HS_CDECL hs_populate_platform(hs_platform_info_t *platform) {
     if (!platform) {
         return HS_INVALID;
     }
@@ -413,7 +454,12 @@ hs_error_t hs_populate_platform(hs_platform_info_t *platform) {
 }
 
 extern "C" HS_PUBLIC_API
-hs_error_t hs_free_compile_error(hs_compile_error_t *error) {
+hs_error_t HS_CDECL hs_free_compile_error(hs_compile_error_t *error) {
+#if defined(FAT_RUNTIME)
+    if (!check_ssse3()) {
+        return HS_ARCH_ERROR;
+    }
+#endif
     freeCompileError(error);
     return HS_SUCCESS;
 }

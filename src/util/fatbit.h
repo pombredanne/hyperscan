@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2016, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -40,6 +40,10 @@
 #include "multibit.h"
 #include "ue2common.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MIN_FAT_SIZE 32
 
 struct fatbit {
@@ -58,31 +62,32 @@ void fatbit_clear(struct fatbit *bits) {
 
 static really_inline
 char fatbit_set(struct fatbit *bits, u32 total_bits, u32 key) {
+    assert(ISALIGNED(bits));
     return mmbit_set(bits->fb_int.raw, total_bits, key);
 }
 
 static really_inline
 void fatbit_unset(struct fatbit *bits, u32 total_bits, u32 key) {
+    assert(ISALIGNED(bits));
      mmbit_unset(bits->fb_int.raw, total_bits, key);
 }
 
 static really_inline
 char fatbit_isset(const struct fatbit *bits, u32 total_bits, u32 key) {
+    assert(ISALIGNED(bits));
     return mmbit_isset(bits->fb_int.raw, total_bits, key);
 }
 
 static really_inline
 u32 fatbit_iterate(const struct fatbit *bits, u32 total_bits, u32 it_in) {
+    assert(ISALIGNED(bits));
     /* TODO: iterate_flat could be specialised as we don't have to worry about
      * partial blocks. */
     return mmbit_iterate(bits->fb_int.raw, total_bits, it_in);
 }
 
-/** \brief Return the size in bytes of a fatbit that can store the given
- * number of bits.
- *
- * Not for use in performance-critical code, implementation is in fatbit.c.
- */
-u32 fatbit_size(u32 total_bits);
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif

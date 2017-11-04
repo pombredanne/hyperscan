@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -36,6 +36,8 @@
 #include "ue2common.h"
 #include "hwlm/hwlm.h" // for hwlm_group_t, HWLMCallback
 
+struct hs_scratch;
+
 typedef enum {
     NOT_CAUTIOUS, //!< not near a boundary (quantify?)
     VECTORING     //!< potentially vectoring
@@ -56,7 +58,6 @@ struct FDRFlood {
 
     u32 ids[FDR_FLOOD_MAX_IDS]; //!< the ids
     hwlm_group_t groups[FDR_FLOOD_MAX_IDS]; //!< group ids to go with string ids
-    u32 len[FDR_FLOOD_MAX_IDS]; //!< lengths to go with the string ids
 };
 
 /** \brief FDR structure.
@@ -69,24 +70,18 @@ struct FDR {
     u32 engineID;
     u32 size;
     u32 maxStringLen;
+    u32 numStrings;
+    u32 confOffset;
     u32 floodOffset;
-
-    /** link is the relative offset of a secondary included FDR table for
-     * stream handling if we're a primary FDR table or the subsidiary tertiary
-     * structures (spillover strings and hash table) if we're a secondary
-     * structure. */
-    u32 link;
-    u8 domain; /* dynamic domain info */
-    u8 schemeWidthByte;  /* scheme width in bytes */
+    u8 stride; /* stride - how frequently the data is consulted by the first
+                * stage matcher */
+    u8 domain; /* number of bits used to index into main FDR table. This value
+                * is used only of debugging/asserts. */
     u16 domainMask; /* pre-computed domain mask */
     u32 tabSize; /* pre-computed hashtable size in bytes */
-    u32 pad1;
-
-    union {
-        u32 s_u32;
-        u64a s_u64a;
-        m128 s_m128;
-    } start;
+    m128 start; /* initial start state to use at offset 0. The state has been
+                 * set up based on the min length of buckets to reduce the need
+                 * for pointless confirms. */
 };
 
 /** \brief FDR runtime arguments.
@@ -100,12 +95,9 @@ struct FDR_Runtime_Args {
     size_t len;
     const u8 *buf_history;
     size_t len_history;
-    const u8 *buf_history_nocase;
-    size_t len_history_nocase;
     size_t start_offset;
     HWLMCallback cb;
-    void *ctxt;
-    hwlm_group_t *groups;
+    struct hs_scratch *scratch;
     const u8 *firstFloodDetect;
     const u64a histBytes;
 };

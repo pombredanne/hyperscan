@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2016, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -39,7 +39,10 @@
 #include "lbr_dump.h"
 #include "limex.h"
 #include "mcclellandump.h"
+#include "mcsheng_dump.h"
 #include "mpv_dump.h"
+#include "shengdump.h"
+#include "tamarama_dump.h"
 
 #ifndef DUMP_SUPPORT
 #error "no dump support"
@@ -47,72 +50,43 @@
 
 namespace ue2 {
 
-#define DISPATCH_CASE(dc_ltype, dc_ftype, dc_subtype, dc_func_call) \
-    case dc_ltype##_NFA_##dc_subtype:                               \
-    nfaExec##dc_ftype##dc_subtype##dc_func_call;                    \
+#define DISPATCH_CASE(dc_ltype, dc_ftype, dc_func_call)                        \
+    case dc_ltype:                                                             \
+        nfaExec##dc_ftype##dc_func_call;                                       \
     break
 
 // general framework calls
 
-#define DISPATCH_BY_NFA_TYPE(dbnt_func)                       \
-    DEBUG_PRINTF("dispatch for NFA type %u\n", nfa->type);    \
-    switch (nfa->type) {                                      \
-        DISPATCH_CASE(LIMEX,   LimEx,   32_1, dbnt_func);     \
-        DISPATCH_CASE(LIMEX,   LimEx,   32_2, dbnt_func);     \
-        DISPATCH_CASE(LIMEX,   LimEx,   32_3, dbnt_func);     \
-        DISPATCH_CASE(LIMEX,   LimEx,   32_4, dbnt_func);     \
-        DISPATCH_CASE(LIMEX,   LimEx,   32_5, dbnt_func);     \
-        DISPATCH_CASE(LIMEX,   LimEx,   32_6, dbnt_func);     \
-        DISPATCH_CASE(LIMEX,   LimEx,   32_7, dbnt_func);     \
-        DISPATCH_CASE(LIMEX,   LimEx,   128_1, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   128_2, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   128_3, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   128_4, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   128_5, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   128_6, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   128_7, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   256_1, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   256_2, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   256_3, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   256_4, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   256_5, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   256_6, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   256_7, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   384_1, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   384_2, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   384_3, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   384_4, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   384_5, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   384_6, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   384_7, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   512_1, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   512_2, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   512_3, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   512_4, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   512_5, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   512_6, dbnt_func);    \
-        DISPATCH_CASE(LIMEX,   LimEx,   512_7, dbnt_func);    \
-        DISPATCH_CASE(MCCLELLAN, McClellan, 8, dbnt_func);    \
-        DISPATCH_CASE(MCCLELLAN, McClellan, 16, dbnt_func);   \
-        DISPATCH_CASE(GOUGH, Gough, 8, dbnt_func);            \
-        DISPATCH_CASE(GOUGH, Gough, 16, dbnt_func);           \
-        DISPATCH_CASE(MPV, Mpv, 0, dbnt_func);                \
-        DISPATCH_CASE(LBR, Lbr, Dot, dbnt_func);              \
-        DISPATCH_CASE(LBR, Lbr, Verm, dbnt_func);             \
-        DISPATCH_CASE(LBR, Lbr, NVerm, dbnt_func);            \
-        DISPATCH_CASE(LBR, Lbr, Shuf, dbnt_func);             \
-        DISPATCH_CASE(LBR, Lbr, Truf, dbnt_func);             \
-        DISPATCH_CASE(CASTLE, Castle, 0, dbnt_func);          \
-    default:                                                  \
-        assert(0);                                            \
+#define DISPATCH_BY_NFA_TYPE(dbnt_func)                                        \
+    DEBUG_PRINTF("dispatch for NFA type %u\n", nfa->type);                     \
+    switch (nfa->type) {                                                       \
+        DISPATCH_CASE(LIMEX_NFA_32, LimEx32, dbnt_func);                       \
+        DISPATCH_CASE(LIMEX_NFA_64, LimEx64, dbnt_func);                       \
+        DISPATCH_CASE(LIMEX_NFA_128, LimEx128, dbnt_func);                     \
+        DISPATCH_CASE(LIMEX_NFA_256, LimEx256, dbnt_func);                     \
+        DISPATCH_CASE(LIMEX_NFA_384, LimEx384, dbnt_func);                     \
+        DISPATCH_CASE(LIMEX_NFA_512, LimEx512, dbnt_func);                     \
+        DISPATCH_CASE(MCCLELLAN_NFA_8, McClellan8, dbnt_func);                 \
+        DISPATCH_CASE(MCCLELLAN_NFA_16, McClellan16, dbnt_func);               \
+        DISPATCH_CASE(GOUGH_NFA_8, Gough8, dbnt_func);                         \
+        DISPATCH_CASE(GOUGH_NFA_16, Gough16, dbnt_func);                       \
+        DISPATCH_CASE(MPV_NFA, Mpv, dbnt_func);                                \
+        DISPATCH_CASE(LBR_NFA_DOT, LbrDot, dbnt_func);                         \
+        DISPATCH_CASE(LBR_NFA_VERM, LbrVerm, dbnt_func);                       \
+        DISPATCH_CASE(LBR_NFA_NVERM, LbrNVerm, dbnt_func);                     \
+        DISPATCH_CASE(LBR_NFA_SHUF, LbrShuf, dbnt_func);                       \
+        DISPATCH_CASE(LBR_NFA_TRUF, LbrTruf, dbnt_func);                       \
+        DISPATCH_CASE(CASTLE_NFA, Castle, dbnt_func);                          \
+        DISPATCH_CASE(SHENG_NFA, Sheng, dbnt_func);                            \
+        DISPATCH_CASE(TAMARAMA_NFA, Tamarama, dbnt_func);                      \
+        DISPATCH_CASE(MCSHENG_NFA_8, McSheng8, dbnt_func);                     \
+        DISPATCH_CASE(MCSHENG_NFA_16, McSheng16, dbnt_func);                   \
+    default:                                                                   \
+        assert(0);                                                             \
     }
 
-void nfaDumpDot(const struct NFA *nfa, FILE *dotFile) {
-    DISPATCH_BY_NFA_TYPE(_dumpDot(nfa, dotFile));
-}
-
-void nfaDumpText(const struct NFA *nfa, FILE *txtFile) {
-    DISPATCH_BY_NFA_TYPE(_dumpText(nfa, txtFile));
+void nfaGenerateDumpFiles(const struct NFA *nfa, const std::string &base) {
+    DISPATCH_BY_NFA_TYPE(_dump(nfa, base));
 }
 
 } // namespace ue2

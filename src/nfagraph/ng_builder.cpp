@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -28,11 +28,13 @@
 
 /** \file
  * \brief: NFA Graph Builder: used by Glushkov construction to construct an
- * NGWrapper from a parsed expression.
+ * NGHolder from a parsed expression.
  */
+
+#include "ng_builder.h"
+
 #include "grey.h"
 #include "ng.h"
-#include "ng_builder.h"
 #include "ng_util.h"
 #include "ue2common.h"
 #include "compiler/compiler.h" // for ParsedExpression
@@ -79,7 +81,7 @@ public:
     void cloneRegion(Position first, Position last,
                      unsigned posOffset) override;
 
-    unique_ptr<NGWrapper> getGraph() override;
+    BuiltExpression getGraph() override;
 
 private:
     /** fetch a vertex given its Position ID. */
@@ -94,8 +96,11 @@ private:
     /** \brief Greybox: used for resource limits. */
     const Grey &grey;
 
-    /** \brief Underlying NGWrapper graph. */
-    unique_ptr<NGWrapper> graph;
+    /** \brief Underlying graph. */
+    unique_ptr<NGHolder> graph;
+
+    /** \brief Underlying expression info. */
+    ExpressionInfo expr;
 
     /** \brief mapping from position to vertex. Use \ref getVertex for access.
      * */
@@ -108,12 +113,9 @@ private:
 } // namespace
 
 NFABuilderImpl::NFABuilderImpl(ReportManager &rm_in, const Grey &grey_in,
-                               const ParsedExpression &expr)
-    : rm(rm_in), grey(grey_in),
-      graph(ue2::make_unique<NGWrapper>(
-          expr.index, expr.highlander, expr.utf8, expr.prefilter, expr.som,
-          expr.id, expr.min_offset, expr.max_offset, expr.min_length)),
-      vertIdx(N_SPECIALS) {
+                               const ParsedExpression &parsed)
+    : rm(rm_in), grey(grey_in), graph(ue2::make_unique<NGHolder>()),
+      expr(parsed.expr), vertIdx(N_SPECIALS) {
 
     // Reserve space for a reasonably-sized NFA
     id2vertex.reserve(64);
@@ -131,8 +133,8 @@ NFABuilderImpl::~NFABuilderImpl() {
 NFAVertex NFABuilderImpl::getVertex(Position pos) const {
     assert(id2vertex.size() >= pos);
     const NFAVertex v = id2vertex[pos];
-    assert(v != NFAGraph::null_vertex());
-    assert(graph->g[v].index == pos);
+    assert(v != NGHolder::null_vertex());
+    assert((*graph)[v].index == pos);
     return v;
 }
 
@@ -147,10 +149,10 @@ void NFABuilderImpl::addVertex(Position pos) {
         id2vertex.resize(pos + 1);
     }
     id2vertex[pos] = v;
-    graph->g[v].index = pos;
+    (*graph)[v].index = pos;
 }
 
-unique_ptr<NGWrapper> NFABuilderImpl::getGraph() {
+BuiltExpression NFABuilderImpl::getGraph() {
     DEBUG_PRINTF("built graph has %zu vertices and %zu edges\n",
                  num_vertices(*graph), num_edges(*graph));
 
@@ -161,13 +163,13 @@ unique_ptr<NGWrapper> NFABuilderImpl::getGraph() {
         throw CompileError("Pattern too large.");
     }
 
-    return move(graph);
+    return { expr, move(graph) };
 }
 
 void NFABuilderImpl::setNodeReportID(Position pos, int offsetAdjust) {
-    Report ir = rm.getBasicInternalReport(*graph, offsetAdjust);
+    Report ir = rm.getBasicInternalReport(expr, offsetAdjust);
     DEBUG_PRINTF("setting report id on %u = (%u, %d, %u)\n",
-                 pos, graph->reportId, offsetAdjust, ir.ekey);
+                 pos, expr.report, offsetAdjust, ir.ekey);
 
     NFAVertex v = getVertex(pos);
     auto &reports = (*graph)[v].reports;
@@ -177,26 +179,24 @@ void NFABuilderImpl::setNodeReportID(Position pos, int offsetAdjust) {
 
 void NFABuilderImpl::addCharReach(Position pos, const CharReach &cr) {
     NFAVertex v = getVertex(pos);
-    graph->g[v].char_reach |= cr;
+    (*graph)[v].char_reach |= cr;
 }
 
 void NFABuilderImpl::setAssertFlag(Position pos, u32 flag) {
     NFAVertex v = getVertex(pos);
-    graph->g[v].assert_flags |= flag;
+    (*graph)[v].assert_flags |= flag;
 }
 
 u32 NFABuilderImpl::getAssertFlag(Position pos) {
     NFAVertex v = getVertex(pos);
-    return graph->g[v].assert_flags;
+    return (*graph)[v].assert_flags;
 }
 
 pair<NFAEdge, bool> NFABuilderImpl::addEdge(NFAVertex u, NFAVertex v) {
     // assert that the edge doesn't already exist
-    assert(edge(u, v, graph->g).second == false);
+    assert(edge(u, v, *graph).second == false);
 
-    pair<NFAEdge, bool> e = add_edge(u, v, *graph);
-    assert(e.second);
-    return e;
+    return add_edge(u, v, *graph);
 }
 
 void NFABuilderImpl::addEdge(Position startPos, Position endPos) {
@@ -209,16 +209,16 @@ void NFABuilderImpl::addEdge(Position startPos, Position endPos) {
 
     if ((u == graph->start || u == graph->startDs) && v == graph->startDs) {
         /* standard special -> special edges already exist */
-        assert(edge(u, v, graph->g).second == true);
+        assert(edge(u, v, *graph).second == true);
         return;
     }
 
-    assert(edge(u, v, graph->g).second == false);
+    assert(edge(u, v, *graph).second == false);
     addEdge(u, v);
 }
 
 bool NFABuilderImpl::hasEdge(Position startPos, Position endPos) const {
-    return edge(getVertex(startPos), getVertex(endPos), graph->g).second;
+    return edge(getVertex(startPos), getVertex(endPos), *graph).second;
 }
 
 Position NFABuilderImpl::getStart() const {
@@ -252,7 +252,7 @@ Position NFABuilderImpl::makePositions(size_t nPositions) {
 }
 
 void NFABuilderImpl::cloneRegion(Position first, Position last, unsigned posOffset) {
-    NFAGraph &g = graph->g;
+    NGHolder &g = *graph;
     assert(posOffset > 0);
 
     // walk the nodes between first and last and copy their vertex properties

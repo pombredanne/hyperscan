@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2016, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -74,9 +74,7 @@ const u8 *vermicelliExec(char c, char nocase, const u8 *buf,
         }
 
         buf += VERM_BOUNDARY - min;
-        if (buf >= buf_end) {
-            return buf_end;
-        }
+        assert(buf < buf_end);
     }
 
     // Aligned loops from here on in
@@ -129,9 +127,7 @@ const u8 *nvermicelliExec(char c, char nocase, const u8 *buf,
         }
 
         buf += VERM_BOUNDARY - min;
-        if (buf >= buf_end) {
-            return buf_end;
-        }
+        assert(buf < buf_end);
     }
 
     // Aligned loops from here on in
@@ -172,17 +168,86 @@ const u8 *vermicelliDoubleExec(char c1, char c2, char nocase, const u8 *buf,
         }
 
         buf += VERM_BOUNDARY - min;
-        if (buf >= buf_end) {
-            return buf_end - 1;
-        }
+        assert(buf < buf_end);
     }
 
     // Aligned loops from here on in
-    if (nocase) {
-        return dvermSearchAlignedNocase(chars1, chars2, c1, c2, buf, buf_end);
-    } else {
-        return dvermSearchAligned(chars1, chars2, c1, c2, buf, buf_end);
+    const u8 *ptr = nocase ? dvermSearchAlignedNocase(chars1, chars2, c1, c2,
+                                                      buf, buf_end)
+                           : dvermSearchAligned(chars1, chars2, c1, c2, buf,
+                                                buf_end);
+    if (ptr) {
+        return ptr;
     }
+
+    // Tidy up the mess at the end
+    ptr = nocase ? dvermPreconditionNocase(chars1, chars2,
+                                           buf_end - VERM_BOUNDARY)
+                 : dvermPrecondition(chars1, chars2, buf_end - VERM_BOUNDARY);
+
+    if (ptr) {
+        return ptr;
+    }
+
+    /* check for partial match at end */
+    u8 mask = nocase ? CASE_CLEAR : 0xff;
+    if ((buf_end[-1] & mask) == (u8)c1) {
+        DEBUG_PRINTF("partial!!!\n");
+        return buf_end - 1;
+    }
+
+    return buf_end;
+}
+
+static really_inline
+const u8 *vermicelliDoubleMaskedExec(char c1, char c2, char m1, char m2,
+                                     const u8 *buf, const u8 *buf_end) {
+    DEBUG_PRINTF("double verm scan (\\x%02hhx&\\x%02hhx)(\\x%02hhx&\\x%02hhx) "
+                 "over %zu bytes\n", c1, m1, c2, m2, (size_t)(buf_end - buf));
+    assert(buf < buf_end);
+    assert((buf_end - buf) >= VERM_BOUNDARY);
+
+    uintptr_t min = (uintptr_t)buf % VERM_BOUNDARY;
+    VERM_TYPE chars1 = VERM_SET_FN(c1);
+    VERM_TYPE chars2 = VERM_SET_FN(c2);
+    VERM_TYPE mask1 = VERM_SET_FN(m1);
+    VERM_TYPE mask2 = VERM_SET_FN(m2);
+
+    if (min) {
+        // Input isn't aligned, so we need to run one iteration with an
+        // unaligned load, then skip buf forward to the next aligned address.
+        // There's some small overlap here, but we don't mind scanning it twice
+        // if we can do it quickly, do we?
+        const u8 *p = dvermPreconditionMasked(chars1, chars2, mask1, mask2, buf);
+        if (p) {
+            return p;
+        }
+
+        buf += VERM_BOUNDARY - min;
+        assert(buf < buf_end);
+    }
+
+    // Aligned loops from here on in
+    const u8 *ptr = dvermSearchAlignedMasked(chars1, chars2, mask1, mask2, c1,
+                                             c2, m1, m2, buf, buf_end);
+    if (ptr) {
+        return ptr;
+    }
+
+    // Tidy up the mess at the end
+    ptr = dvermPreconditionMasked(chars1, chars2, mask1, mask2,
+                                  buf_end - VERM_BOUNDARY);
+
+    if (ptr) {
+        return ptr;
+    }
+
+    /* check for partial match at end */
+    if ((buf_end[-1] & m1) == (u8)c1) {
+        return buf_end - 1;
+    }
+
+    return buf_end;
 }
 
 // Reverse vermicelli scan. Provides exact semantics and returns (buf - 1) if

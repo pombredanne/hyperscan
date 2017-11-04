@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -27,6 +27,10 @@
  */
 
 #include "config.h"
+#include "expressions.h"
+
+#include "hs.h"
+#include "string_util.h"
 
 #include <algorithm>
 #include <fstream>
@@ -34,20 +38,18 @@
 #include <stdexcept>
 #include <string>
 
-#include <boost/algorithm/string/trim.hpp>
 #include <sys/types.h>
 #include <sys/stat.h>
 #if !defined(_WIN32)
 #include <dirent.h>
+#include <fcntl.h>
 #include <unistd.h>
 #else
 // Windows support is probably very fragile
 #include <windows.h>
 #endif
 
-#include "expressions.h"
-#include "hs.h"
-#include "string_util.h"
+#include <boost/algorithm/string/trim.hpp>
 
 using namespace std;
 
@@ -90,7 +92,7 @@ void processLine(string &line, unsigned lineNum,
 
     //cout << "Inserting expr: id=" << id << ", pcre=" << pcre_str << endl;
 
-    bool ins = exprMap.insert(ExpressionMap::value_type(id, pcre_str)).second;
+    bool ins = exprMap.emplace(id, pcre_str).second;
     if (!ins) {
         failLine(lineNum, file, line, "Duplicate ID found.");
     }
@@ -101,7 +103,7 @@ void processLine(string &line, unsigned lineNum,
 #define S_ISDIR(st_m) (_S_IFDIR & (st_m))
 #define S_ISREG(st_m) (_S_IFREG & (st_m))
 #endif
-void loadExpressionsFromFile(const string &fname, ExpressionMap &exprMap) {
+void HS_CDECL loadExpressionsFromFile(const string &fname, ExpressionMap &exprMap) {
     struct stat st;
     if (stat(fname.c_str(), &st) != 0) {
         return;
@@ -144,8 +146,9 @@ bool isIgnorable(const std::string &f) {
 #ifndef _WIN32
 void loadExpressions(const string &inPath, ExpressionMap &exprMap) {
     // Is our input path a file or a directory?
+    int fd = open(inPath.c_str(), O_RDONLY);
     struct stat st;
-    if (stat(inPath.c_str(), &st) != 0) {
+    if (fstat(fd, &st) != 0) {
         cerr << "Can't stat path: '" << inPath << "'" << endl;
         exit(1);
     }
@@ -158,7 +161,7 @@ void loadExpressions(const string &inPath, ExpressionMap &exprMap) {
             exit(1);
         }
     } else if (S_ISDIR(st.st_mode)) {
-        DIR *d = opendir(inPath.c_str());
+        DIR *d = fdopendir(fd);
         if (d == nullptr) {
             cerr << "Can't open directory: '" << inPath << "'" << endl;
             exit(1);
@@ -187,14 +190,15 @@ void loadExpressions(const string &inPath, ExpressionMap &exprMap) {
                 exit(1);
             }
         }
-        closedir(d);
+        (void)closedir(d);
     } else {
         cerr << "Can't stat path: '" << inPath << "'" << endl;
         exit(1);
     }
+    (void)close(fd);
 }
 #else // windows TODO: improve
-void loadExpressions(const string &inPath, ExpressionMap &exprMap) {
+void HS_CDECL loadExpressions(const string &inPath, ExpressionMap &exprMap) {
     // Is our input path a file or a directory?
     struct stat st;
     if (stat(inPath.c_str(), &st) != 0) {
@@ -250,8 +254,8 @@ void loadExpressions(const string &inPath, ExpressionMap &exprMap) {
 }
 #endif
 
-void loadSignatureList(const string &inFile,
-                       SignatureSet &signatures) {
+void HS_CDECL loadSignatureList(const string &inFile,
+                                SignatureSet &signatures) {
     ifstream f(inFile.c_str());
     if (!f.good()) {
         cerr << "Can't open file: '" << inFile << "'" << endl;
@@ -278,20 +282,19 @@ void loadSignatureList(const string &inFile,
     }
 }
 
-void limitBySignature(ExpressionMap &exprMap,
-                      const SignatureSet &signatures) {
+ExpressionMap limitToSignatures(const ExpressionMap &exprMap,
+                                const SignatureSet &signatures) {
     ExpressionMap keepers;
 
-    SignatureSet::const_iterator it, ite;
-    for (it = signatures.begin(), ite = signatures.end(); it != ite; ++it) {
-        ExpressionMap::const_iterator match = exprMap.find(*it);
+    for (auto id : signatures) {
+        auto match = exprMap.find(id);
         if (match == exprMap.end()) {
-            cerr << "Unable to find signature " << *it
+            cerr << "Unable to find signature " << id
                     << " in expression set!" << endl;
             exit(1);
         }
         keepers.insert(*match);
     }
 
-    exprMap.swap(keepers);
+    return keepers;
 }

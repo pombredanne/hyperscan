@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -29,10 +29,10 @@
 #include "config.h"
 
 #include "gtest/gtest.h"
-#include "util/alloc.h"
+#include "util/arch.h"
+#include "util/bytecode_ptr.h"
 #include "util/make_unique.h"
 #include "util/simd_utils.h"
-
 
 using namespace std;
 using namespace ue2;
@@ -111,10 +111,10 @@ void simd_setbit(m128 *a, unsigned int i) { return setbit128(a, i); }
 void simd_setbit(m256 *a, unsigned int i) { return setbit256(a, i); }
 void simd_setbit(m384 *a, unsigned int i) { return setbit384(a, i); }
 void simd_setbit(m512 *a, unsigned int i) { return setbit512(a, i); }
-bool simd_testbit(const m128 *a, unsigned int i) { return testbit128(a, i); }
-bool simd_testbit(const m256 *a, unsigned int i) { return testbit256(a, i); }
-bool simd_testbit(const m384 *a, unsigned int i) { return testbit384(a, i); }
-bool simd_testbit(const m512 *a, unsigned int i) { return testbit512(a, i); }
+bool simd_testbit(const m128 &a, unsigned int i) { return testbit128(a, i); }
+bool simd_testbit(const m256 &a, unsigned int i) { return testbit256(a, i); }
+bool simd_testbit(const m384 &a, unsigned int i) { return testbit384(a, i); }
+bool simd_testbit(const m512 &a, unsigned int i) { return testbit512(a, i); }
 u32 simd_diffrich(const m128 &a, const m128 &b) { return diffrich128(a, b); }
 u32 simd_diffrich(const m256 &a, const m256 &b) { return diffrich256(a, b); }
 u32 simd_diffrich(const m384 &a, const m384 &b) { return diffrich384(a, b); }
@@ -143,6 +143,10 @@ void simd_loadbytes(m128 *a, const void *ptr, unsigned i) { *a = loadbytes128(pt
 void simd_loadbytes(m256 *a, const void *ptr, unsigned i) { *a = loadbytes256(ptr, i); }
 void simd_loadbytes(m384 *a, const void *ptr, unsigned i) { *a = loadbytes384(ptr, i); }
 void simd_loadbytes(m512 *a, const void *ptr, unsigned i) { *a = loadbytes512(ptr, i); }
+m128 simd_lshift64(const m128 &a, unsigned i) { return lshift64_m128(a, i); }
+m256 simd_lshift64(const m256 &a, unsigned i) { return lshift64_m256(a, i); }
+m384 simd_lshift64(const m384 &a, unsigned i) { return lshift64_m384(a, i); }
+m512 simd_lshift64(const m512 &a, unsigned i) { return lshift64_m512(a, i); }
 
 template<typename T>
 class SimdUtilsTest : public testing::Test {
@@ -420,15 +424,15 @@ TYPED_TEST(SimdUtilsTest, testbit) {
 
     // First, all bits are on in 'ones'.
     for (unsigned int i = 0; i < total_bits; i++) {
-        ASSERT_EQ(1, simd_testbit(&ones, i)) << "bit " << i << " is on";
+        ASSERT_EQ(1, simd_testbit(ones, i)) << "bit " << i << " is on";
     }
 
     // Try individual bits; only 'i' should be on.
     for (unsigned int i = 0; i < total_bits; i++) {
         TypeParam a = setbit<TypeParam>(i);
         for (unsigned int j = 0; j < total_bits; j++) {
-            ASSERT_EQ(i == j ? 1 : 0, simd_testbit(&a, j)) << "bit " << i
-                                                           << " is wrong";
+            ASSERT_EQ(i == j ? 1 : 0, simd_testbit(a, j)) << "bit " << i
+                                                          << " is wrong";
         }
     }
 }
@@ -471,7 +475,7 @@ TYPED_TEST(SimdUtilsTest, diffrich) {
 
     // and nothing is on in zeroes
     for (unsigned int i = 0; i < total_bits; i++) {
-        ASSERT_EQ(0, simd_testbit(&zeroes, i)) << "bit " << i << " is off";
+        ASSERT_EQ(0, simd_testbit(zeroes, i)) << "bit " << i << " is off";
     }
 
     // All-zeroes and all-ones differ in all words
@@ -540,8 +544,9 @@ TYPED_TEST(SimdUtilsTest, load_store) {
         a.bytes[i] = (char)(i % 256);
     }
 
-    aligned_unique_ptr<char> mem_ptr = aligned_zmalloc_unique<char>(sizeof(a));
+    auto mem_ptr = make_bytecode_ptr<char>(sizeof(a), alignof(TypeParam));
     char *mem = mem_ptr.get();
+
     ASSERT_EQ(0, (size_t)mem % 16U);
 
     memset(mem, 0, sizeof(a));
@@ -585,6 +590,65 @@ TYPED_TEST(SimdUtilsTest, loadbytes_storebytes) {
     }
 }
 
+TYPED_TEST(SimdUtilsTest, lshift64) {
+    TypeParam a;
+    memset(&a, 0x5a, sizeof(a));
+
+    static constexpr u64a exp_val = 0x5a5a5a5a5a5a5a5aULL;
+
+    union {
+        TypeParam simd;
+        u64a qword[sizeof(TypeParam) / 8];
+    } c;
+
+    for (unsigned s = 0; s < 64; s++) {
+        c.simd = simd_lshift64(a, s);
+
+        const u64a expected = exp_val << s;
+        for (size_t i = 0; i < sizeof(c) / 8; i++) {
+            EXPECT_EQ(expected, c.qword[i]);
+        }
+    }
+
+    /* Clang 3.4 on FreeBSD 10 crashes on the following - disable for now */
+#if !(defined(__FreeBSD__) && defined(__clang__) && __clang_major__ == 3)
+
+    // test immediates
+    u64a expected;
+
+    c.simd = simd_lshift64(a, 1);
+    expected = exp_val << 1;
+    for (size_t i = 0; i < sizeof(c) / 8; i++) {
+        EXPECT_EQ(expected, c.qword[i]);
+    }
+
+    c.simd = simd_lshift64(a, 2);
+    expected = exp_val << 2;
+    for (size_t i = 0; i < sizeof(c) / 8; i++) {
+        EXPECT_EQ(expected, c.qword[i]);
+    }
+
+    c.simd = simd_lshift64(a, 7);
+    expected = exp_val << 7;
+    for (size_t i = 0; i < sizeof(c) / 8; i++) {
+        EXPECT_EQ(expected, c.qword[i]);
+    }
+
+    c.simd = simd_lshift64(a, 31);
+    expected = exp_val << 31;
+    for (size_t i = 0; i < sizeof(c) / 8; i++) {
+        EXPECT_EQ(expected, c.qword[i]);
+    }
+#endif
+}
+
+TEST(SimdUtilsTest, alignment) {
+    ASSERT_EQ(16, alignof(m128));
+    ASSERT_EQ(32, alignof(m256));
+    ASSERT_EQ(16, alignof(m384));
+    ASSERT_EQ(64, alignof(m512));
+}
+
 TEST(SimdUtilsTest, movq) {
     m128 simd;
 
@@ -615,7 +679,13 @@ TEST(SimdUtilsTest, set16x8) {
     }
 }
 
-#if defined(__AVX2__)
+TEST(SimdUtilsTest, set4x32) {
+    u32 cmp[4] = { 0x12345678, 0x12345678, 0x12345678, 0x12345678 };
+    m128 simd = set4x32(cmp[0]);
+    ASSERT_EQ(0, memcmp(cmp, &simd, sizeof(simd)));
+}
+
+#if defined(HAVE_AVX2)
 TEST(SimdUtilsTest, set32x8) {
     char cmp[sizeof(m256)];
 
@@ -639,5 +709,105 @@ TEST(SimdUtilsTest, set2x128) {
     }
 }
 #endif
+
+TEST(SimdUtilsTest, variableByteShift128) {
+    char base[] = "0123456789ABCDEF";
+    m128 in = loadu128(base);
+
+    EXPECT_TRUE(!diff128(rshiftbyte_m128(in, 0),
+                         variable_byte_shift_m128(in, 0)));
+    EXPECT_TRUE(!diff128(rshiftbyte_m128(in, 1),
+                         variable_byte_shift_m128(in, -1)));
+    EXPECT_TRUE(!diff128(rshiftbyte_m128(in, 2),
+                         variable_byte_shift_m128(in, -2)));
+    EXPECT_TRUE(!diff128(rshiftbyte_m128(in, 3),
+                         variable_byte_shift_m128(in, -3)));
+    EXPECT_TRUE(!diff128(rshiftbyte_m128(in, 4),
+                         variable_byte_shift_m128(in, -4)));
+    EXPECT_TRUE(!diff128(rshiftbyte_m128(in, 5),
+                         variable_byte_shift_m128(in, -5)));
+    EXPECT_TRUE(!diff128(rshiftbyte_m128(in, 6),
+                         variable_byte_shift_m128(in, -6)));
+    EXPECT_TRUE(!diff128(rshiftbyte_m128(in, 7),
+                         variable_byte_shift_m128(in, -7)));
+    EXPECT_TRUE(!diff128(rshiftbyte_m128(in, 8),
+                         variable_byte_shift_m128(in, -8)));
+    EXPECT_TRUE(!diff128(rshiftbyte_m128(in, 9),
+                         variable_byte_shift_m128(in, -9)));
+    EXPECT_TRUE(!diff128(rshiftbyte_m128(in, 10),
+                         variable_byte_shift_m128(in, -10)));
+
+    EXPECT_TRUE(!diff128(lshiftbyte_m128(in, 0),
+                         variable_byte_shift_m128(in, 0)));
+    EXPECT_TRUE(!diff128(lshiftbyte_m128(in, 1),
+                         variable_byte_shift_m128(in, 1)));
+    EXPECT_TRUE(!diff128(lshiftbyte_m128(in, 2),
+                         variable_byte_shift_m128(in, 2)));
+    EXPECT_TRUE(!diff128(lshiftbyte_m128(in, 3),
+                         variable_byte_shift_m128(in, 3)));
+    EXPECT_TRUE(!diff128(lshiftbyte_m128(in, 4),
+                         variable_byte_shift_m128(in, 4)));
+    EXPECT_TRUE(!diff128(lshiftbyte_m128(in, 5),
+                         variable_byte_shift_m128(in, 5)));
+    EXPECT_TRUE(!diff128(lshiftbyte_m128(in, 6),
+                         variable_byte_shift_m128(in, 6)));
+    EXPECT_TRUE(!diff128(lshiftbyte_m128(in, 7),
+                         variable_byte_shift_m128(in, 7)));
+    EXPECT_TRUE(!diff128(lshiftbyte_m128(in, 8),
+                         variable_byte_shift_m128(in, 8)));
+    EXPECT_TRUE(!diff128(lshiftbyte_m128(in, 9),
+                         variable_byte_shift_m128(in, 9)));
+    EXPECT_TRUE(!diff128(lshiftbyte_m128(in, 10),
+                         variable_byte_shift_m128(in, 10)));
+
+    EXPECT_TRUE(!diff128(zeroes128(), variable_byte_shift_m128(in, 16)));
+    EXPECT_TRUE(!diff128(zeroes128(), variable_byte_shift_m128(in, -16)));
+}
+
+TEST(SimdUtilsTest, max_u8_m128) {
+    char base1[] = "0123456789ABCDE\xfe";
+    char base2[] = "!!23455889aBCd\xff\xff";
+    char expec[] = "0123456889aBCd\xff\xff";
+    m128 in1 = loadu128(base1);
+    m128 in2 = loadu128(base2);
+    m128 result = max_u8_m128(in1, in2);
+    EXPECT_TRUE(!diff128(result, loadu128(expec)));
+}
+
+TEST(SimdUtilsTest, min_u8_m128) {
+    char base1[] = "0123456789ABCDE\xfe";
+    char base2[] = "!!23455889aBCd\xff\xff";
+    char expec[] = "!!23455789ABCDE\xfe";
+    m128 in1 = loadu128(base1);
+    m128 in2 = loadu128(base2);
+    m128 result = min_u8_m128(in1, in2);
+    EXPECT_TRUE(!diff128(result, loadu128(expec)));
+}
+
+TEST(SimdUtilsTest, sadd_u8_m128) {
+    unsigned char base1[] = {0, 0x80, 0xff, 'A', '1', '2', '3', '4',
+                             '1', '2', '3', '4', '1', '2', '3', '4'};
+    unsigned char base2[] = {'a', 0x80, 'b', 'A', 0x10, 0x10, 0x10, 0x10,
+                             0x30, 0x30, 0x30, 0x30, 0, 0, 0, 0};
+    unsigned char expec[] = {'a', 0xff, 0xff, 0x82, 'A', 'B', 'C', 'D',
+                             'a', 'b', 'c', 'd', '1', '2', '3', '4'};
+    m128 in1 = loadu128(base1);
+    m128 in2 = loadu128(base2);
+    m128 result = sadd_u8_m128(in1, in2);
+    EXPECT_TRUE(!diff128(result, loadu128(expec)));
+}
+
+TEST(SimdUtilsTest, sub_u8_m128) {
+    unsigned char base1[] = {'a', 0xff, 0xff, 0x82, 'A', 'B', 'C', 'D',
+                             'a', 'b', 'c', 'd', '1', '2', '3', '4'};
+    unsigned char base2[] = {0, 0x80, 0xff, 'A', '1', '2', '3', '4',
+                             '1', '2', '3', '4', '1', '2', '3', '4'};
+    unsigned char expec[] = {'a', 0x7f, 0, 'A', 0x10, 0x10, 0x10, 0x10,
+                             0x30, 0x30, 0x30, 0x30, 0, 0, 0, 0};
+    m128 in1 = loadu128(base1);
+    m128 in2 = loadu128(base2);
+    m128 result = sub_u8_m128(in1, in2);
+    EXPECT_TRUE(!diff128(result, loadu128(expec)));
+}
 
 } // namespace

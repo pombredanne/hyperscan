@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -32,6 +32,7 @@
 
 #include "gtest/gtest.h"
 #include "nfagraph/ng_repeat.h"
+#include "nfagraph/ng_util.h"
 #include "util/depth.h"
 #include "hs_compile.h"
 
@@ -65,36 +66,39 @@ struct PureRepeatTest {
 class NFAPureRepeatTest : public TestWithParam<PureRepeatTest> { };
 
 static const PureRepeatTest pureRepeatTests[] = {
-    { "^.*", 0, depth::infinity() },
-    { "^.+", 1, depth::infinity() },
-    { "^.", 1, 1 },
-    { "^..", 2, 2 },
-    { "^.?.", 1, 2 },
-    { "^.{1,2}", 1, 2 },
-    { "^.{1,3}", 1, 3 },
-    { "^.{1,10}", 1, 10 },
-    { "^.{1,200}", 1, 200 },
-    { "^.{200}", 200, 200 },
-    { "^.{0,}", 0, depth::infinity() },
-    { "^.{1,}", 1, depth::infinity() },
-    { "^.{2,}", 2, depth::infinity() },
-    { "^.{10,}", 10, depth::infinity() },
-    { "^.{200,}", 200, depth::infinity() },
-    { "^.{5000,}", 5000, depth::infinity() },
-    { "^.{0,1}", 0, 1 },
-    { "^.{0,2}", 0, 2 },
-    { "^.{0,100}", 0, 100 },
-    { "^.{0,5000}", 0, 5000 },
-    { "^x{10}x{20,30}", 30, 40 },
-    { "^..?..?..?..?..?", 5, 10 }
+    { "^.*", depth(0), depth::infinity() },
+    { "^.+", depth(1), depth::infinity() },
+    { "^.", depth(1), depth(1) },
+    { "^..", depth(2), depth(2) },
+    { "^.?.", depth(1), depth(2) },
+    { "^.{1,2}", depth(1), depth(2) },
+    { "^.{1,3}", depth(1), depth(3) },
+    { "^.{1,10}", depth(1), depth(10) },
+    { "^.{1,200}", depth(1), depth(200) },
+    { "^.{200}", depth(200), depth(200) },
+    { "^.{0,}", depth(0), depth::infinity() },
+    { "^.{1,}", depth(1), depth::infinity() },
+    { "^.{2,}", depth(2), depth::infinity() },
+    { "^.{10,}", depth(10), depth::infinity() },
+    { "^.{200,}", depth(200), depth::infinity() },
+    { "^.{5000,}", depth(5000), depth::infinity() },
+    { "^.{0,1}", depth(0), depth(1) },
+    { "^.{0,2}", depth(0), depth(2) },
+    { "^.{0,100}", depth(0), depth(100) },
+    { "^.{0,5000}", depth(0), depth(5000) },
+    { "^x{10}x{20,30}", depth(30), depth(40) },
+    { "^..?..?..?..?..?", depth(5), depth(10) }
 };
 
-INSTANTIATE_TEST_CASE_P(PureRepeat, NFAPureRepeatTest, ValuesIn(pureRepeatTests));
+INSTANTIATE_TEST_CASE_P(PureRepeat, NFAPureRepeatTest,
+                        ValuesIn(pureRepeatTests));
 
 TEST_P(NFAPureRepeatTest, Check) {
     const PureRepeatTest &t = GetParam();
     SCOPED_TRACE(testing::Message() << "Pattern: " << t.pattern);
-    unique_ptr<NGWrapper> w(constructGraph(t.pattern, HS_FLAG_ALLOWEMPTY));
+    auto w = constructGraph(t.pattern, HS_FLAG_ALLOWEMPTY);
+    ASSERT_TRUE(w != nullptr);
+    clearReports(*w);
 
     PureRepeat repeat;
     bool result = isPureRepeat(*w, repeat);
@@ -102,4 +106,10 @@ TEST_P(NFAPureRepeatTest, Check) {
     ASSERT_EQ(true, result);
     ASSERT_EQ(t.minBound, repeat.bounds.min);
     ASSERT_EQ(t.maxBound, repeat.bounds.max);
+}
+
+// for google test
+void PrintTo(const PureRepeatTest &p, ::std::ostream *os) {
+    *os << "PureRepeatTest: " << p.pattern
+        << "{" << p.minBound << ',' << p.maxBound << '}';
 }

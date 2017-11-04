@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -40,17 +40,16 @@
 #include "ue2common.h"
 #include "rose_common.h"
 #include "rose_in_graph.h"
-#include "util/alloc.h"
+#include "util/bytecode_ptr.h"
 #include "util/charreach.h"
-#include "util/ue2_containers.h"
+#include "util/flat_containers.h"
+#include "util/noncopyable.h"
 #include "util/ue2string.h"
 
 #include <memory>
 #include <set>
 #include <utility>
 #include <vector>
-
-#include <boost/core/noncopyable.hpp>
 
 struct NFA;
 struct SmallWriteEngine;
@@ -65,6 +64,7 @@ struct raw_som_dfa;
 class  CharReach;
 class  NGHolder;
 class  ReportManager;
+class  SmallWriteBuild;
 class  SomSlotManager;
 
 class RoseDedupeAux {
@@ -73,22 +73,21 @@ public:
 
     /** \brief True if we can not establish that at most a single callback will
      * be generated at a given offset from this set of reports. */
-    virtual bool requiresDedupeSupport(const ue2::flat_set<ReportID> &reports)
+    virtual bool requiresDedupeSupport(const flat_set<ReportID> &reports)
         const = 0;
 };
 
 /** \brief Abstract interface intended for callers from elsewhere in the tree,
  * real underlying implementation is RoseBuildImpl in rose_build_impl.h. */
-class RoseBuild : boost::noncopyable {
+class RoseBuild : noncopyable {
 public:
     virtual ~RoseBuild();
 
     /** \brief Adds a single literal. */
     virtual void add(bool anchored, bool eod, const ue2_literal &lit,
-                     const ue2::flat_set<ReportID> &ids) = 0;
+                     const flat_set<ReportID> &ids) = 0;
 
-    virtual bool addRose(const RoseInGraph &ig, bool prefilter,
-                         bool finalChance = false) = 0;
+    virtual bool addRose(const RoseInGraph &ig, bool prefilter) = 0;
     virtual bool addSombeRose(const RoseInGraph &ig) = 0;
 
     virtual bool addOutfix(const NGHolder &h) = 0;
@@ -100,21 +99,21 @@ public:
 
     /** \brief Returns true if we were able to add it as a mask. */
     virtual bool add(bool anchored, const std::vector<CharReach> &mask,
-                     const ue2::flat_set<ReportID> &reports) = 0;
+                     const flat_set<ReportID> &reports) = 0;
 
     /** \brief Attempts to add the graph to the anchored acyclic table. Returns
      * true on success. */
     virtual bool addAnchoredAcyclic(const NGHolder &graph) = 0;
 
     virtual bool validateMask(const std::vector<CharReach> &mask,
-                              const ue2::flat_set<ReportID> &reports,
+                              const flat_set<ReportID> &reports,
                               bool anchored, bool eod) const = 0;
     virtual void addMask(const std::vector<CharReach> &mask,
-                         const ue2::flat_set<ReportID> &reports, bool anchored,
+                         const flat_set<ReportID> &reports, bool anchored,
                          bool eod) = 0;
 
     /** \brief Construct a runtime implementation. */
-    virtual ue2::aligned_unique_ptr<RoseEngine> buildRose(u32 minWidth) = 0;
+    virtual bytecode_ptr<RoseEngine> buildRose(u32 minWidth) = 0;
 
     virtual std::unique_ptr<RoseDedupeAux> generateDedupeAux() const = 0;
 
@@ -128,20 +127,12 @@ public:
 // Construct a usable Rose builder.
 std::unique_ptr<RoseBuild> makeRoseBuilder(ReportManager &rm,
                                            SomSlotManager &ssm,
+                                           SmallWriteBuild &smwr,
                                            const CompileContext &cc,
                                            const BoundaryReports &boundary);
 
 bool roseCheckRose(const RoseInGraph &ig, bool prefilter,
                    const ReportManager &rm, const CompileContext &cc);
-
-size_t roseSize(const RoseEngine *t);
-
-/* used by heuristics to determine the small write engine. High numbers are
- * intended to indicate a lightweight rose. */
-u32 roseQuality(const RoseEngine *t);
-
-ue2::aligned_unique_ptr<RoseEngine>
-roseAddSmallWrite(const RoseEngine *t, const SmallWriteEngine *smwr);
 
 bool roseIsPureLiteral(const RoseEngine *t);
 

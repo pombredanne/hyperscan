@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -144,7 +144,7 @@ void findMaskLiteral(const vector<CharReach> &mask, bool streaming,
 }
 
 static
-bool initFmlCandidates(const CharReach &cr, vector<ue2_literal> *cand) {
+bool initFmlCandidates(const CharReach &cr, vector<ue2_literal> &cand) {
     for (size_t i = cr.find_first(); i != cr.npos; i = cr.find_next(i)) {
         char c = (char)i;
         bool nocase = myisupper(c) && cr.test(mytolower(c));
@@ -152,24 +152,25 @@ bool initFmlCandidates(const CharReach &cr, vector<ue2_literal> *cand) {
             continue;
         }
 
-        if (cand->size() >= MAX_MASK_LITS) {
+        if (cand.size() >= MAX_MASK_LITS) {
             DEBUG_PRINTF("hit lit limit of %u\n", MAX_MASK_LITS);
             return false;
         }
 
-        cand->emplace_back(c, nocase);
+        cand.emplace_back(c, nocase);
     }
 
-    assert(cand->size() <= MAX_MASK_LITS);
-    return !cand->empty();
+    assert(cand.size() <= MAX_MASK_LITS);
+    return !cand.empty();
 }
 
 static
-bool expandFmlCandidates(const CharReach &cr, vector<ue2_literal> *cand) {
+bool expandFmlCandidates(const CharReach &cr, vector<ue2_literal> &curr,
+                         vector<ue2_literal> &cand) {
     DEBUG_PRINTF("expanding string with cr of %zu\n", cr.count());
-    DEBUG_PRINTF("  current cand list size %zu\n", cand->size());
+    DEBUG_PRINTF("  current cand list size %zu\n", cand.size());
 
-    vector<ue2_literal> curr;
+    curr.clear();
 
     for (size_t i = cr.find_first(); i != cr.npos; i = cr.find_next(i)) {
         char c = (char)i;
@@ -178,14 +179,14 @@ bool expandFmlCandidates(const CharReach &cr, vector<ue2_literal> *cand) {
             continue;
         }
 
-        for (const auto &lit : *cand) {
+        for (const auto &lit : cand) {
             if (curr.size() >= MAX_MASK_LITS) {
                 DEBUG_PRINTF("hit lit limit of %u\n", MAX_MASK_LITS);
                 return false;
             }
 
-            curr.emplace_back(c, nocase);
-            curr.back() += lit;
+            curr.push_back(lit);
+            curr.back().push_back(c, nocase);
         }
     }
 
@@ -196,7 +197,7 @@ bool expandFmlCandidates(const CharReach &cr, vector<ue2_literal> *cand) {
     }
 
     assert(curr.size() <= MAX_MASK_LITS);
-    cand->swap(curr);
+    cand.swap(curr);
     return true;
 }
 
@@ -213,6 +214,7 @@ u32 scoreFmlCandidates(const vector<ue2_literal> &cand) {
     u32 min_period = len;
 
     for (const auto &lit : cand) {
+        DEBUG_PRINTF("candidate: %s\n", dumpString(lit).c_str());
         u32 period = lit.length() - maxStringSelfOverlap(lit);
         min_period = min(min_period, period);
     }
@@ -238,31 +240,37 @@ bool findMaskLiterals(const vector<CharReach> &mask, vector<ue2_literal> *lit,
     *minBound = 0;
     *length = 0;
 
-    vector<ue2_literal> candidates, best_candidates;
+    vector<ue2_literal> candidates, best_candidates, curr_candidates;
     u32 best_score = 0;
     u32 best_minOffset = 0;
-    vector<CharReach>::const_iterator it, itb, ite;
-    for (it = itb = mask.begin(), ite = mask.end(); it != ite; ++it) {
+
+    for (auto it = mask.begin(); it != mask.end(); ++it) {
         candidates.clear();
-        if (!initFmlCandidates(*it, &candidates)) {
+        if (!initFmlCandidates(*it, candidates)) {
             DEBUG_PRINTF("failed to init\n");
             continue;
         }
         DEBUG_PRINTF("++\n");
-        vector<CharReach>::const_iterator jt = it;
-        while (jt != itb) {
+        auto jt = it;
+        while (jt != mask.begin()) {
             --jt;
             DEBUG_PRINTF("--\n");
-            if (!expandFmlCandidates(*jt, &candidates)) {
+            if (!expandFmlCandidates(*jt, curr_candidates, candidates)) {
                 DEBUG_PRINTF("expansion stopped\n");
                 break;
             }
         }
+
+        // Candidates have been expanded in reverse order.
+        for (auto &cand : candidates) {
+            cand = reverse_literal(cand);
+        }
+
         u32 score = scoreFmlCandidates(candidates);
         DEBUG_PRINTF("scored %u for literal set of size %zu\n", score,
                      candidates.size());
         if (!candidates.empty() && score >= best_score) {
-            best_minOffset = it - itb - candidates.back().length() + 1;
+            best_minOffset = it - mask.begin() - candidates.back().length() + 1;
             best_candidates.swap(candidates);
             best_score = score;
        }
@@ -277,11 +285,12 @@ bool findMaskLiterals(const vector<CharReach> &mask, vector<ue2_literal> *lit,
     *length = best_candidates.back().length();
 
     DEBUG_PRINTF("best minbound %u length %u\n", *minBound, *length);
-    for (const auto &cand : best_candidates) {
-        assert(cand.length() == *length);
-        lit->push_back(cand);
-    }
 
+    assert(all_of_in(best_candidates, [&](const ue2_literal &s) {
+        return s.length() == *length;
+    }));
+
+    *lit = std::move(best_candidates);
     return true;
 }
 
@@ -336,7 +345,8 @@ void buildLiteralMask(const vector<CharReach> &mask, vector<u8> &msk,
 }
 
 static
-bool validateTransientMask(const vector<CharReach> &mask, bool eod, const Grey &grey) {
+bool validateTransientMask(const vector<CharReach> &mask, bool anchored,
+                           bool eod, const Grey &grey) {
     assert(!mask.empty());
 
     // An EOD anchored mask requires that everything fit into history, while an
@@ -345,6 +355,12 @@ bool validateTransientMask(const vector<CharReach> &mask, bool eod, const Grey &
     const size_t max_width = grey.maxHistoryAvailable + (eod ? 0 : 1);
     if (mask.size() > max_width) {
         DEBUG_PRINTF("mask too long for max available history\n");
+        return false;
+    }
+
+    /* although anchored masks cannot be transient, short masks may be placed
+     * into the atable. */
+    if (anchored && mask.size() > grey.maxAnchoredRegion) {
         return false;
     }
 
@@ -407,8 +423,8 @@ bool validateTransientMask(const vector<CharReach> &mask, bool eod, const Grey &
 
 static
 bool maskIsNeeded(const ue2_literal &lit, const NGHolder &g) {
-    ue2::flat_set<NFAVertex> curr = {g.accept};
-    ue2::flat_set<NFAVertex> next;
+    flat_set<NFAVertex> curr = {g.accept};
+    flat_set<NFAVertex> next;
 
     for (auto it = lit.rbegin(), ite = lit.rend(); it != ite; ++it) {
         const CharReach &cr = *it;
@@ -444,7 +460,7 @@ bool maskIsNeeded(const ue2_literal &lit, const NGHolder &g) {
 
 static
 void addTransientMask(RoseBuildImpl &build, const vector<CharReach> &mask,
-                      const ue2::flat_set<ReportID> &reports, bool anchored,
+                      const flat_set<ReportID> &reports, bool anchored,
                       bool eod) {
     vector<ue2_literal> lits;
     u32 lit_minBound; /* minBound of each literal in lit */
@@ -473,7 +489,7 @@ void addTransientMask(RoseBuildImpl &build, const vector<CharReach> &mask,
 
     // Everyone gets the same report ID.
     ReportID mask_report = build.getNewNfaReport();
-    setReportId(*mask_graph, mask_report);
+    set_report(*mask_graph, mask_report);
 
     // Build the HWLM literal mask.
     vector<u8> msk, cmp;
@@ -509,7 +525,7 @@ void addTransientMask(RoseBuildImpl &build, const vector<CharReach> &mask,
         ENSURE_AT_LEAST(&build.ematcher_region_size, mask.size());
     }
 
-    const ue2::flat_set<ReportID> no_reports;
+    const flat_set<ReportID> no_reports;
 
     for (const auto &lit : lits) {
         u32 lit_id = build.getLiteralId(lit, msk, cmp, delay, table);
@@ -525,7 +541,7 @@ void addTransientMask(RoseBuildImpl &build, const vector<CharReach> &mask,
             g[v].left.leftfix_report = mask_report;
         } else {
             // Make sure our edge bounds are correct.
-            auto e = edge_by_target(parent, v, g).first;
+            RoseEdge e = edge(parent, v, g);
             g[e].minBound = 0;
             g[e].maxBound = anchored ? 0 : ROSE_BOUND_INF;
             g[e].history = anchored ? ROSE_ROLE_HISTORY_ANCH
@@ -537,7 +553,7 @@ void addTransientMask(RoseBuildImpl &build, const vector<CharReach> &mask,
         g[v].max_offset = v_max_offset;
 
         if (eod) {
-            auto e = add_edge(v, eod_v, g).first;
+            RoseEdge e = add_edge(v, eod_v, g);
             g[e].minBound = 0;
             g[e].maxBound = 0;
             g[e].history = ROSE_ROLE_HISTORY_LAST_BYTE;
@@ -546,7 +562,7 @@ void addTransientMask(RoseBuildImpl &build, const vector<CharReach> &mask,
 }
 
 static
-unique_ptr<NGHolder> buildMaskRhs(const ue2::flat_set<ReportID> &reports,
+unique_ptr<NGHolder> buildMaskRhs(const flat_set<ReportID> &reports,
                                   const vector<CharReach> &mask,
                                   u32 suffix_len) {
     assert(suffix_len);
@@ -567,16 +583,16 @@ unique_ptr<NGHolder> buildMaskRhs(const ue2::flat_set<ReportID> &reports,
         succ = u;
     }
 
-    add_edge(h.start, succ, h);
+    NFAEdge e = add_edge(h.start, succ, h);
+    h[e].tops.insert(DEFAULT_TOP);
 
     return rhs;
 }
 
 static
-void doAddMask(RoseBuildImpl &tbi, bool anchored,
-               const vector<CharReach> &mask, const ue2_literal &lit,
-               u32 prefix_len, u32 suffix_len,
-               const ue2::flat_set<ReportID> &reports) {
+void doAddMask(RoseBuildImpl &tbi, bool anchored, const vector<CharReach> &mask,
+               const ue2_literal &lit, u32 prefix_len, u32 suffix_len,
+               const flat_set<ReportID> &reports) {
     /* Note: bounds are relative to literal start */
     RoseInGraph ig;
     RoseInVertex s = add_vertex(RoseInVertexProps::makeStart(anchored), ig);
@@ -625,6 +641,7 @@ void doAddMask(RoseBuildImpl &tbi, bool anchored,
                     = buildMaskLhs(true, minBound - prefix2_len + overlap,
                                    mask3);
                 mhs->kind = NFA_INFIX;
+                setTops(*mhs);
                 add_edge(u, v, RoseInEdgeProps(mhs, delay), ig);
 
                 DEBUG_PRINTF("add anch literal too!\n");
@@ -702,8 +719,8 @@ bool checkAllowMask(const vector<CharReach> &mask, ue2_literal *lit,
 }
 
 bool RoseBuildImpl::add(bool anchored, const vector<CharReach> &mask,
-                        const ue2::flat_set<ReportID> &reports) {
-    if (validateTransientMask(mask, false, cc.grey)) {
+                        const flat_set<ReportID> &reports) {
+    if (validateTransientMask(mask, anchored, false, cc.grey)) {
         bool eod = false;
         addTransientMask(*this, mask, reports, anchored, eod);
         return true;
@@ -725,14 +742,14 @@ bool RoseBuildImpl::add(bool anchored, const vector<CharReach> &mask,
 }
 
 bool RoseBuildImpl::validateMask(const vector<CharReach> &mask,
-                                 UNUSED const ue2::flat_set<ReportID> &reports,
-                                 UNUSED bool anchored, bool eod) const {
-    return validateTransientMask(mask, eod, cc.grey);
+                                 UNUSED const flat_set<ReportID> &reports,
+                                 bool anchored, bool eod) const {
+    return validateTransientMask(mask, anchored, eod, cc.grey);
 }
 
 static
 unique_ptr<NGHolder> makeAnchoredGraph(const vector<CharReach> &mask,
-                                       const ue2::flat_set<ReportID> &reports,
+                                       const flat_set<ReportID> &reports,
                                        bool eod) {
     auto gp = ue2::make_unique<NGHolder>();
     NGHolder &g = *gp;
@@ -754,7 +771,7 @@ unique_ptr<NGHolder> makeAnchoredGraph(const vector<CharReach> &mask,
 
 static
 bool addAnchoredMask(RoseBuildImpl &build, const vector<CharReach> &mask,
-                     const ue2::flat_set<ReportID> &reports, bool eod) {
+                     const flat_set<ReportID> &reports, bool eod) {
     if (!build.cc.grey.allowAnchoredAcyclic) {
         return false;
     }
@@ -766,8 +783,8 @@ bool addAnchoredMask(RoseBuildImpl &build, const vector<CharReach> &mask,
 }
 
 void RoseBuildImpl::addMask(const vector<CharReach> &mask,
-                            const ue2::flat_set<ReportID> &reports,
-                            bool anchored, bool eod) {
+                            const flat_set<ReportID> &reports, bool anchored,
+                            bool eod) {
     if (anchored && addAnchoredMask(*this, mask, reports, eod)) {
         DEBUG_PRINTF("added mask as anchored acyclic graph\n");
         return;

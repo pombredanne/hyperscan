@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -26,7 +26,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/** \file
+/**
+ * \file
  * \brief Large Bounded Repeat (LBR) engine build code.
  */
 
@@ -36,17 +37,19 @@
 #include "ng_holder.h"
 #include "ng_repeat.h"
 #include "ng_reports.h"
-#include "nfa/shufticompile.h"
-#include "nfa/trufflecompile.h"
+#include "nfa/castlecompile.h"
 #include "nfa/lbr_internal.h"
 #include "nfa/nfa_internal.h"
 #include "nfa/repeatcompile.h"
+#include "nfa/shufticompile.h"
+#include "nfa/trufflecompile.h"
 #include "util/alloc.h"
 #include "util/bitutils.h" // for lg2
 #include "util/compile_context.h"
 #include "util/container.h"
 #include "util/depth.h"
 #include "util/dump_charclass.h"
+#include "util/report_manager.h"
 #include "util/verify_types.h"
 
 using namespace std;
@@ -126,33 +129,31 @@ void fillNfa(NFA *nfa, lbr_common *c, ReportID report, const depth &repeatMin,
 }
 
 template <class LbrStruct> static
-aligned_unique_ptr<NFA> makeLbrNfa(NFAEngineType nfa_type,
-                                   enum RepeatType rtype,
-                                   const depth &repeatMax) {
+bytecode_ptr<NFA> makeLbrNfa(NFAEngineType nfa_type, enum RepeatType rtype,
+                             const depth &repeatMax) {
     size_t tableLen = 0;
     if (rtype == REPEAT_SPARSE_OPTIMAL_P) {
         tableLen = sizeof(u64a) * (repeatMax + 1);
     }
     size_t len = sizeof(NFA) + sizeof(LbrStruct) + sizeof(RepeatInfo) +
                  tableLen + sizeof(u64a);
-    aligned_unique_ptr<NFA> nfa = aligned_zmalloc_unique<NFA>(len);
+    auto nfa = make_zeroed_bytecode_ptr<NFA>(len);
     nfa->type = verify_u8(nfa_type);
     nfa->length = verify_u32(len);
     return nfa;
 }
 
 static
-aligned_unique_ptr<NFA> buildLbrDot(const CharReach &cr, const depth &repeatMin,
-                                    const depth &repeatMax, u32 minPeriod,
-                                    bool is_reset, ReportID report) {
+bytecode_ptr<NFA> buildLbrDot(const CharReach &cr, const depth &repeatMin,
+                              const depth &repeatMax, u32 minPeriod,
+                              bool is_reset, ReportID report) {
     if (!cr.all()) {
         return nullptr;
     }
 
     enum RepeatType rtype = chooseRepeatType(repeatMin, repeatMax, minPeriod,
                                              is_reset);
-    aligned_unique_ptr<NFA> nfa
-        = makeLbrNfa<lbr_dot>(LBR_NFA_Dot, rtype, repeatMax);
+    auto nfa = makeLbrNfa<lbr_dot>(LBR_NFA_DOT, rtype, repeatMax);
     struct lbr_dot *ld = (struct lbr_dot *)getMutableImplNfa(nfa.get());
 
     fillNfa<lbr_dot>(nfa.get(), &ld->common, report, repeatMin, repeatMax,
@@ -163,10 +164,9 @@ aligned_unique_ptr<NFA> buildLbrDot(const CharReach &cr, const depth &repeatMin,
 }
 
 static
-aligned_unique_ptr<NFA> buildLbrVerm(const CharReach &cr,
-                                     const depth &repeatMin,
-                                     const depth &repeatMax, u32 minPeriod,
-                                     bool is_reset, ReportID report) {
+bytecode_ptr<NFA> buildLbrVerm(const CharReach &cr, const depth &repeatMin,
+                               const depth &repeatMax, u32 minPeriod,
+                               bool is_reset, ReportID report) {
     const CharReach escapes(~cr);
 
     if (escapes.count() != 1) {
@@ -175,8 +175,7 @@ aligned_unique_ptr<NFA> buildLbrVerm(const CharReach &cr,
 
     enum RepeatType rtype = chooseRepeatType(repeatMin, repeatMax, minPeriod,
                                              is_reset);
-    aligned_unique_ptr<NFA> nfa
-        = makeLbrNfa<lbr_verm>(LBR_NFA_Verm, rtype, repeatMax);
+    auto nfa = makeLbrNfa<lbr_verm>(LBR_NFA_VERM, rtype, repeatMax);
     struct lbr_verm *lv = (struct lbr_verm *)getMutableImplNfa(nfa.get());
     lv->c = escapes.find_first();
 
@@ -188,10 +187,9 @@ aligned_unique_ptr<NFA> buildLbrVerm(const CharReach &cr,
 }
 
 static
-aligned_unique_ptr<NFA> buildLbrNVerm(const CharReach &cr,
-                                      const depth &repeatMin,
-                                      const depth &repeatMax, u32 minPeriod,
-                                      bool is_reset, ReportID report) {
+bytecode_ptr<NFA> buildLbrNVerm(const CharReach &cr, const depth &repeatMin,
+                                const depth &repeatMax, u32 minPeriod,
+                                bool is_reset, ReportID report) {
     const CharReach escapes(cr);
 
     if (escapes.count() != 1) {
@@ -200,8 +198,7 @@ aligned_unique_ptr<NFA> buildLbrNVerm(const CharReach &cr,
 
     enum RepeatType rtype = chooseRepeatType(repeatMin, repeatMax, minPeriod,
                                              is_reset);
-    aligned_unique_ptr<NFA> nfa
-        = makeLbrNfa<lbr_verm>(LBR_NFA_NVerm, rtype, repeatMax);
+    auto nfa = makeLbrNfa<lbr_verm>(LBR_NFA_NVERM, rtype, repeatMax);
     struct lbr_verm *lv = (struct lbr_verm *)getMutableImplNfa(nfa.get());
     lv->c = escapes.find_first();
 
@@ -213,20 +210,18 @@ aligned_unique_ptr<NFA> buildLbrNVerm(const CharReach &cr,
 }
 
 static
-aligned_unique_ptr<NFA> buildLbrShuf(const CharReach &cr,
-                                     const depth &repeatMin,
-                                     const depth &repeatMax, u32 minPeriod,
-                                     bool is_reset, ReportID report) {
+bytecode_ptr<NFA> buildLbrShuf(const CharReach &cr, const depth &repeatMin,
+                               const depth &repeatMax, u32 minPeriod,
+                               bool is_reset, ReportID report) {
     enum RepeatType rtype = chooseRepeatType(repeatMin, repeatMax, minPeriod,
                                              is_reset);
-    aligned_unique_ptr<NFA> nfa
-        = makeLbrNfa<lbr_shuf>(LBR_NFA_Shuf, rtype, repeatMax);
+    auto nfa = makeLbrNfa<lbr_shuf>(LBR_NFA_SHUF, rtype, repeatMax);
     struct lbr_shuf *ls = (struct lbr_shuf *)getMutableImplNfa(nfa.get());
 
     fillNfa<lbr_shuf>(nfa.get(), &ls->common, report, repeatMin, repeatMax,
                       minPeriod, rtype);
 
-    if (shuftiBuildMasks(~cr, &ls->mask_lo, &ls->mask_hi) == -1) {
+    if (shuftiBuildMasks(~cr, (u8 *)&ls->mask_lo, (u8 *)&ls->mask_hi) == -1) {
         return nullptr;
     }
 
@@ -235,30 +230,27 @@ aligned_unique_ptr<NFA> buildLbrShuf(const CharReach &cr,
 }
 
 static
-aligned_unique_ptr<NFA> buildLbrTruf(const CharReach &cr,
-                                     const depth &repeatMin,
-                                     const depth &repeatMax, u32 minPeriod,
-                                     bool is_reset, ReportID report) {
+bytecode_ptr<NFA> buildLbrTruf(const CharReach &cr, const depth &repeatMin,
+                               const depth &repeatMax, u32 minPeriod,
+                               bool is_reset, ReportID report) {
     enum RepeatType rtype = chooseRepeatType(repeatMin, repeatMax, minPeriod,
                                              is_reset);
-    aligned_unique_ptr<NFA> nfa
-        = makeLbrNfa<lbr_truf>(LBR_NFA_Truf, rtype, repeatMax);
+    auto nfa = makeLbrNfa<lbr_truf>(LBR_NFA_TRUF, rtype, repeatMax);
     struct lbr_truf *lc = (struct lbr_truf *)getMutableImplNfa(nfa.get());
 
     fillNfa<lbr_truf>(nfa.get(), &lc->common, report, repeatMin, repeatMax,
                       minPeriod, rtype);
 
-    truffleBuildMasks(~cr, &lc->mask1, &lc->mask2);
+    truffleBuildMasks(~cr, (u8 *)&lc->mask1, (u8 *)&lc->mask2);
 
     DEBUG_PRINTF("built truffle lbr\n");
     return nfa;
 }
 
 static
-aligned_unique_ptr<NFA> constructLBR(const CharReach &cr,
-                                     const depth &repeatMin,
-                                     const depth &repeatMax, u32 minPeriod,
-                                     bool is_reset, ReportID report) {
+bytecode_ptr<NFA> constructLBR(const CharReach &cr, const depth &repeatMin,
+                               const depth &repeatMax, u32 minPeriod,
+                               bool is_reset, ReportID report) {
     DEBUG_PRINTF("bounds={%s,%s}, cr=%s (count %zu), report=%u\n",
                  repeatMin.str().c_str(), repeatMax.str().c_str(),
                  describeClass(cr, 20, CC_OUT_TEXT).c_str(), cr.count(),
@@ -266,8 +258,8 @@ aligned_unique_ptr<NFA> constructLBR(const CharReach &cr,
     assert(repeatMin <= repeatMax);
     assert(repeatMax.is_reachable());
 
-    aligned_unique_ptr<NFA> nfa
-        = buildLbrDot(cr, repeatMin, repeatMax, minPeriod, is_reset, report);
+    auto nfa =
+        buildLbrDot(cr, repeatMin, repeatMax, minPeriod, is_reset, report);
 
     if (!nfa) {
         nfa = buildLbrVerm(cr, repeatMin, repeatMax, minPeriod, is_reset,
@@ -294,13 +286,19 @@ aligned_unique_ptr<NFA> constructLBR(const CharReach &cr,
     return nfa;
 }
 
-aligned_unique_ptr<NFA> constructLBR(const PureRepeat &repeat,
-                                     const vector<vector<CharReach>> &triggers,
-                                     const CompileContext &cc) {
+bytecode_ptr<NFA> constructLBR(const CastleProto &proto,
+                               const vector<vector<CharReach>> &triggers,
+                               const CompileContext &cc,
+                               const ReportManager &rm) {
     if (!cc.grey.allowLbr) {
         return nullptr;
     }
 
+    if (proto.repeats.size() != 1) {
+        return nullptr;
+    }
+
+    const PureRepeat &repeat = proto.repeats.begin()->second;
     assert(!repeat.reach.none());
 
     if (repeat.reports.size() != 1) {
@@ -317,6 +315,9 @@ aligned_unique_ptr<NFA> constructLBR(const PureRepeat &repeat,
     }
 
     ReportID report = *repeat.reports.begin();
+    if (has_managed_reports(proto.kind)) {
+        report = rm.getProgramOffset(report);
+    }
 
     DEBUG_PRINTF("building LBR %s\n", repeat.bounds.str().c_str());
     return constructLBR(repeat.reach, repeat.bounds.min, repeat.bounds.max,
@@ -324,9 +325,10 @@ aligned_unique_ptr<NFA> constructLBR(const PureRepeat &repeat,
 }
 
 /** \brief Construct an LBR engine from the given graph \p g. */
-aligned_unique_ptr<NFA> constructLBR(const NGHolder &g,
-                                     const vector<vector<CharReach>> &triggers,
-                                     const CompileContext &cc) {
+bytecode_ptr<NFA> constructLBR(const NGHolder &g,
+                               const vector<vector<CharReach>> &triggers,
+                               const CompileContext &cc,
+                               const ReportManager &rm) {
     if (!cc.grey.allowLbr) {
         return nullptr;
     }
@@ -335,28 +337,13 @@ aligned_unique_ptr<NFA> constructLBR(const NGHolder &g,
     if (!isPureRepeat(g, repeat)) {
         return nullptr;
     }
-
-    return constructLBR(repeat, triggers, cc);
-}
-
-/** \brief True if graph \p g could be turned into an LBR engine. */
-bool isLBR(const NGHolder &g, const Grey &grey) {
-    if (!grey.allowLbr) {
-        return false;
-    }
-
-    PureRepeat repeat;
-    if (!isPureRepeat(g, repeat)) {
-        DEBUG_PRINTF("not pure bounded repeat\n");
-        return false;
-    }
-
     if (repeat.reports.size() != 1) {
         DEBUG_PRINTF("too many reports\n");
-        return false;
+        return nullptr;
     }
 
-    return true;
+    CastleProto proto(g.kind, repeat);
+    return constructLBR(proto, triggers, cc, rm);
 }
 
 } // namespace ue2

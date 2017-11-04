@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -40,69 +40,80 @@
 #include "state.h"
 #include "ue2common.h"
 #include "database.h"
-#include "nfa/limex_context.h" // for NFAContext128 etc
 #include "nfa/nfa_api_queue.h"
-#include "sidecar/sidecar.h"
 #include "rose/rose_internal.h"
 #include "util/fatbit.h"
-#include "util/multibit.h"
+
+/**
+ * Determine the space required for a correctly aligned array of fatbit
+ * structure, laid out as:
+ *
+ * - an array of num_entries pointers, each to a fatbit.
+ * - an array of fatbit structures, each of size fatbit_len.
+ *
+ * fatbit_len should have been determined at compile time, via the
+ * fatbit_size() call.
+ */
+static
+size_t fatbit_array_size(u32 num_entries, u32 fatbit_len) {
+    size_t len = 0;
+
+    // Array of pointers to each fatbit entry.
+    len += sizeof(struct fatbit *) * num_entries;
+
+    // Fatbit entries themselves.
+    len = ROUNDUP_N(len, alignof(struct fatbit));
+    len += (size_t)fatbit_len * num_entries;
+
+    return ROUNDUP_N(len, 8); // Round up for potential padding.
+}
 
 /** Used by hs_alloc_scratch and hs_clone_scratch to allocate a complete
  * scratch region from a prototype structure. */
 static
 hs_error_t alloc_scratch(const hs_scratch_t *proto, hs_scratch_t **scratch) {
     u32 queueCount = proto->queueCount;
-    u32 deduperCount = proto->deduper.log_size;
+    u32 activeQueueArraySize = proto->activeQueueArraySize;
+    u32 deduperCount = proto->deduper.dkey_count;
+    u32 deduperLogSize = proto->deduper.log_size;
     u32 bStateSize = proto->bStateSize;
     u32 tStateSize = proto->tStateSize;
     u32 fullStateSize = proto->fullStateSize;
-    u32 anchored_region_len = proto->anchored_region_len;
-    u32 anchored_region_width = proto->anchored_region_width;
     u32 anchored_literal_region_len = proto->anchored_literal_region_len;
-    u32 anchored_literal_region_width = proto->anchored_literal_count;
+    u32 anchored_literal_fatbit_size = proto->anchored_literal_fatbit_size;
 
     u32 som_store_size = proto->som_store_count * sizeof(u64a);
     u32 som_attempted_store_size = proto->som_store_count * sizeof(u64a);
-    u32 som_now_size = fatbit_size(proto->som_store_count);
-    u32 som_attempted_size = fatbit_size(proto->som_store_count);
+    u32 som_now_size = proto->som_fatbit_size;
+    u32 som_attempted_size = proto->som_fatbit_size;
 
     struct hs_scratch *s;
     struct hs_scratch *s_tmp;
     size_t queue_size = queueCount * sizeof(struct mq);
     size_t qmpq_size = queueCount * sizeof(struct queue_match);
 
-    assert(anchored_region_len < 8 * sizeof(s->am_log_sum));
-    assert(anchored_literal_region_len < 8 * sizeof(s->am_log_sum));
+    assert(anchored_literal_region_len < 8 * sizeof(s->al_log_sum));
 
-    size_t anchored_region_size = anchored_region_len
-        * (mmbit_size(anchored_region_width) + sizeof(u8 *));
-    anchored_region_size = ROUNDUP_N(anchored_region_size, 8);
-
-    size_t anchored_literal_region_size = anchored_literal_region_len
-        * (mmbit_size(anchored_literal_region_width) + sizeof(u8 *));
-    anchored_literal_region_size = ROUNDUP_N(anchored_literal_region_size, 8);
-
-    size_t delay_size = mmbit_size(proto->delay_count) * DELAY_SLOT_COUNT;
-
-    size_t nfa_context_size = 2 * sizeof(struct NFAContext512) + 127;
+    size_t anchored_literal_region_size = fatbit_array_size(
+        anchored_literal_region_len, proto->anchored_literal_fatbit_size);
+    size_t delay_region_size =
+        fatbit_array_size(DELAY_SLOT_COUNT, proto->delay_fatbit_size);
 
     // the size is all the allocated stuff, not including the struct itself
     size_t size = queue_size + 63
                   + bStateSize + tStateSize
                   + fullStateSize + 63 /* cacheline padding */
-                  + nfa_context_size
-                  + fatbit_size(proto->roleCount) /* handled roles */
-                  + fatbit_size(queueCount) /* active queue array */
-                  + 2 * fatbit_size(deduperCount) /* need odd and even logs */
-                  + 2 * fatbit_size(deduperCount) /* ditto som logs */
+                  + proto->handledKeyFatbitSize /* handled roles */
+                  + activeQueueArraySize /* active queue array */
+                  + 2 * deduperLogSize /* need odd and even logs */
+                  + 2 * deduperLogSize /* ditto som logs */
                   + 2 * sizeof(u64a) * deduperCount /* start offsets for som */
-                  + anchored_region_size
-                  + anchored_literal_region_size + qmpq_size + delay_size
+                  + anchored_literal_region_size + qmpq_size
+                  + delay_region_size
                   + som_store_size
                   + som_now_size
                   + som_attempted_size
-                  + som_attempted_store_size
-                  + proto->sideScratchSize + 15;
+                  + som_attempted_store_size + 15;
 
     /* the struct plus the allocated stuff plus padding for cacheline
      * alignment */
@@ -122,8 +133,10 @@ hs_error_t alloc_scratch(const hs_scratch_t *proto, hs_scratch_t **scratch) {
     *s = *proto;
 
     s->magic = SCRATCH_MAGIC;
+    s->in_use = 0;
     s->scratchSize = alloc_size;
     s->scratch_alloc = (char *)s_tmp;
+    s->fdr_conf = NULL;
 
     // each of these is at an offset from the previous
     char *current = (char *)s + sizeof(*s);
@@ -142,23 +155,24 @@ hs_error_t alloc_scratch(const hs_scratch_t *proto, hs_scratch_t **scratch) {
     s->som_attempted_store = (u64a *)current;
     current += som_attempted_store_size;
 
-    s->delay_slots = (u8 *)current;
-    current += delay_size;
-
-    current = ROUNDUP_PTR(current, 8);
-    s->am_log = (u8 **)current;
-    current += sizeof(u8 *) * anchored_region_len;
-    for (u32 i = 0; i < anchored_region_len; i++) {
-        s->am_log[i] = (u8 *)current;
-        current += mmbit_size(anchored_region_width);
+    current = ROUNDUP_PTR(current, alignof(struct fatbit *));
+    s->delay_slots = (struct fatbit **)current;
+    current += sizeof(struct fatbit *) * DELAY_SLOT_COUNT;
+    current = ROUNDUP_PTR(current, alignof(struct fatbit));
+    for (u32 i = 0; i < DELAY_SLOT_COUNT; i++) {
+        s->delay_slots[i] = (struct fatbit *)current;
+        assert(ISALIGNED(s->delay_slots[i]));
+        current += proto->delay_fatbit_size;
     }
 
-    current = ROUNDUP_PTR(current, 8);
-    s->al_log = (u8 **)current;
-    current += sizeof(u8 *) * anchored_literal_region_len;
+    current = ROUNDUP_PTR(current, alignof(struct fatbit *));
+    s->al_log = (struct fatbit **)current;
+    current += sizeof(struct fatbit *) * anchored_literal_region_len;
+    current = ROUNDUP_PTR(current, alignof(struct fatbit));
     for (u32 i = 0; i < anchored_literal_region_len; i++) {
-        s->al_log[i] = (u8 *)current;
-        current += mmbit_size(anchored_literal_region_width);
+        s->al_log[i] = (struct fatbit *)current;
+        assert(ISALIGNED(s->al_log[i]));
+        current += anchored_literal_fatbit_size;
     }
 
     current = ROUNDUP_PTR(current, 8);
@@ -174,13 +188,6 @@ hs_error_t alloc_scratch(const hs_scratch_t *proto, hs_scratch_t **scratch) {
     current += tStateSize;
 
     current = ROUNDUP_PTR(current, 64);
-    assert(ISALIGNED_CL(current));
-    s->nfaContext = current;
-    current += sizeof(struct NFAContext512);
-    current = ROUNDUP_PTR(current, 64);
-    assert(ISALIGNED_CL(current));
-    s->nfaContextSom = current;
-    current += sizeof(struct NFAContext512);
 
     assert(ISALIGNED_N(current, 8));
     s->deduper.som_start_log[0] = (u64a *)current;
@@ -191,32 +198,28 @@ hs_error_t alloc_scratch(const hs_scratch_t *proto, hs_scratch_t **scratch) {
 
     assert(ISALIGNED_N(current, 8));
     s->aqa = (struct fatbit *)current;
-    current += fatbit_size(queueCount);
+    current += activeQueueArraySize;
 
     s->handled_roles = (struct fatbit *)current;
-    current += fatbit_size(proto->roleCount);
+    current += proto->handledKeyFatbitSize;
 
     s->deduper.log[0] = (struct fatbit *)current;
-    current += fatbit_size(deduperCount);
+    current += deduperLogSize;
 
     s->deduper.log[1] = (struct fatbit *)current;
-    current += fatbit_size(deduperCount);
+    current += deduperLogSize;
 
     s->deduper.som_log[0] = (struct fatbit *)current;
-    current += fatbit_size(deduperCount);
+    current += deduperLogSize;
 
     s->deduper.som_log[1] = (struct fatbit *)current;
-    current += fatbit_size(deduperCount);
+    current += deduperLogSize;
 
     s->som_set_now = (struct fatbit *)current;
     current += som_now_size;
 
     s->som_attempted_set = (struct fatbit *)current;
     current += som_attempted_size;
-
-    current = ROUNDUP_PTR(current, 16);
-    s->side_scratch = (void *)current;
-    current += proto->sideScratchSize;
 
     current = ROUNDUP_PTR(current, 64);
     assert(ISALIGNED_CL(current));
@@ -238,7 +241,8 @@ hs_error_t alloc_scratch(const hs_scratch_t *proto, hs_scratch_t **scratch) {
 }
 
 HS_PUBLIC_API
-hs_error_t hs_alloc_scratch(const hs_database_t *db, hs_scratch_t **scratch) {
+hs_error_t HS_CDECL hs_alloc_scratch(const hs_database_t *db,
+                                     hs_scratch_t **scratch) {
     if (!db || !scratch) {
         return HS_INVALID;
     }
@@ -261,6 +265,9 @@ hs_error_t hs_alloc_scratch(const hs_database_t *db, hs_scratch_t **scratch) {
         }
         if ((*scratch)->magic != SCRATCH_MAGIC) {
             return HS_INVALID;
+        }
+        if (markScratchInUse(*scratch)) {
+            return HS_SCRATCH_IN_USE;
         }
     }
 
@@ -287,51 +294,29 @@ hs_error_t hs_alloc_scratch(const hs_database_t *db, hs_scratch_t **scratch) {
     }
     proto->scratch_alloc = (char *)proto_tmp;
 
-    u32 max_anchored_match = rose->anchoredDistance;
-    if (max_anchored_match > rose->maxSafeAnchoredDROffset) {
-        u32 anchored_region_len = max_anchored_match
-            - rose->maxSafeAnchoredDROffset;
-        if (anchored_region_len > proto->anchored_region_len) {
-            resize = 1;
-            proto->anchored_region_len = anchored_region_len;
-        }
-    }
-
-    u32 anchored_region_width = rose->anchoredMatches;
-    if (anchored_region_width > proto->anchored_region_width) {
-        resize = 1;
-        proto->anchored_region_width = anchored_region_width;
-    }
-
     if (rose->anchoredDistance > proto->anchored_literal_region_len) {
         resize = 1;
         proto->anchored_literal_region_len = rose->anchoredDistance;
     }
 
-    if (rose->anchored_count > proto->anchored_literal_count) {
+    if (rose->anchored_fatbit_size > proto->anchored_literal_fatbit_size) {
         resize = 1;
-        proto->anchored_literal_count = rose->anchored_count;
+        proto->anchored_literal_fatbit_size = rose->anchored_fatbit_size;
     }
 
-    if (rose->delay_count > proto->delay_count) {
+    if (rose->delay_fatbit_size > proto->delay_fatbit_size) {
         resize = 1;
-        proto->delay_count = rose->delay_count;
+        proto->delay_fatbit_size = rose->delay_fatbit_size;
     }
 
-    if (rose->roleCount > proto->roleCount) {
+    if (rose->handledKeyFatbitSize > proto->handledKeyFatbitSize) {
         resize = 1;
-        proto->roleCount = rose->roleCount;
+        proto->handledKeyFatbitSize = rose->handledKeyFatbitSize;
     }
 
     if (rose->tStateSize > proto->tStateSize) {
         resize = 1;
         proto->tStateSize = rose->tStateSize;
-    }
-
-    const struct sidecar *side = getSLiteralMatcher(rose);
-    if (side && sidecarScratchSize(side) > proto->sideScratchSize) {
-        resize = 1;
-        proto->sideScratchSize = sidecarScratchSize(side);
     }
 
     u32 som_store_count = rose->somLocationCount;
@@ -340,10 +325,20 @@ hs_error_t hs_alloc_scratch(const hs_database_t *db, hs_scratch_t **scratch) {
         proto->som_store_count = som_store_count;
     }
 
+    if (rose->somLocationFatbitSize > proto->som_fatbit_size) {
+        resize = 1;
+        proto->som_fatbit_size = rose->somLocationFatbitSize;
+    }
+
     u32 queueCount = rose->queueCount;
     if (queueCount > proto->queueCount) {
         resize = 1;
         proto->queueCount = queueCount;
+    }
+
+    if (rose->activeQueueArraySize > proto->activeQueueArraySize) {
+        resize = 1;
+        proto->activeQueueArraySize = rose->activeQueueArraySize;
     }
 
     u32 bStateSize = 0;
@@ -365,9 +360,10 @@ hs_error_t hs_alloc_scratch(const hs_database_t *db, hs_scratch_t **scratch) {
         proto->fullStateSize = fullStateSize;
     }
 
-    if (rose->dkeyCount > proto->deduper.log_size) {
+    if (rose->dkeyCount > proto->deduper.dkey_count) {
         resize = 1;
-        proto->deduper.log_size = rose->dkeyCount;
+        proto->deduper.dkey_count = rose->dkeyCount;
+        proto->deduper.log_size = rose->dkeyLogSize;
     }
 
     if (resize) {
@@ -383,13 +379,16 @@ hs_error_t hs_alloc_scratch(const hs_database_t *db, hs_scratch_t **scratch) {
         }
     } else {
         hs_scratch_free(proto_tmp); /* kill off temp used for sizing */
+        unmarkScratchInUse(*scratch);
     }
 
+    assert(!(*scratch)->in_use);
     return HS_SUCCESS;
 }
 
 HS_PUBLIC_API
-hs_error_t hs_clone_scratch(const hs_scratch_t *src, hs_scratch_t **dest) {
+hs_error_t HS_CDECL hs_clone_scratch(const hs_scratch_t *src,
+                                     hs_scratch_t **dest) {
     if (!dest || !src || !ISALIGNED_CL(src) || src->magic != SCRATCH_MAGIC) {
         return HS_INVALID;
     }
@@ -401,11 +400,12 @@ hs_error_t hs_clone_scratch(const hs_scratch_t *src, hs_scratch_t **dest) {
         return ret;
     }
 
+    assert(!(*dest)->in_use);
     return HS_SUCCESS;
 }
 
 HS_PUBLIC_API
-hs_error_t hs_free_scratch(hs_scratch_t *scratch) {
+hs_error_t HS_CDECL hs_free_scratch(hs_scratch_t *scratch) {
     if (scratch) {
         /* has to be aligned before we can do anything with it */
         if (!ISALIGNED_CL(scratch)) {
@@ -414,6 +414,10 @@ hs_error_t hs_free_scratch(hs_scratch_t *scratch) {
         if (scratch->magic != SCRATCH_MAGIC) {
             return HS_INVALID;
         }
+        if (markScratchInUse(scratch)) {
+            return HS_SCRATCH_IN_USE;
+        }
+
         scratch->magic = 0;
         assert(scratch->scratch_alloc);
         DEBUG_PRINTF("scratch %p is really at %p : freeing\n", scratch,
@@ -425,7 +429,7 @@ hs_error_t hs_free_scratch(hs_scratch_t *scratch) {
 }
 
 HS_PUBLIC_API
-hs_error_t hs_scratch_size(const hs_scratch_t *scratch, size_t *size) {
+hs_error_t HS_CDECL hs_scratch_size(const hs_scratch_t *scratch, size_t *size) {
     if (!size || !scratch || !ISALIGNED_CL(scratch) ||
         scratch->magic != SCRATCH_MAGIC) {
         return HS_INVALID;

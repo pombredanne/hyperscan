@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -34,7 +34,7 @@
 #include <string>
 #include <vector>
 
-#define DEFAULT_MAX_HISTORY 60
+#define DEFAULT_MAX_HISTORY 110
 
 using namespace std;
 
@@ -42,6 +42,7 @@ namespace ue2 {
 
 Grey::Grey(void) :
                    optimiseComponentTree(true),
+                   calcComponents(true),
                    performGraphSimplification(true),
                    prefilterReductions(true),
                    removeEdgeRedundancy(true),
@@ -50,17 +51,28 @@ Grey::Grey(void) :
                    allowLitHaig(true),
                    allowLbr(true),
                    allowMcClellan(true),
+                   allowSheng(true),
+                   allowMcSheng(true),
                    allowPuff(true),
-                   allowRose(true),
+                   allowLiteral(true),
+                   allowViolet(true),
                    allowExtendedNFA(true), /* bounded repeats of course */
                    allowLimExNFA(true),
-                   allowSidecar(true),
                    allowAnchoredAcyclic(true),
                    allowSmallLiteralSet(true),
                    allowCastle(true),
                    allowDecoratedLiteral(true),
+                   allowApproximateMatching(true),
                    allowNoodle(true),
                    fdrAllowTeddy(true),
+                   fdrAllowFlood(true),
+                   violetAvoidSuffixes(true),
+                   violetAvoidWeakInfixes(true),
+                   violetDoubleCut(true),
+                   violetExtractStrongLiterals(true),
+                   violetLiteralChains(true),
+                   violetDoubleCutLiteralLen(3),
+                   violetEarlyCleanLiteralLen(6),
                    puffImproveHead(true),
                    castleExclusive(true),
                    mergeSEP(true), /* short exhaustible passthroughs */
@@ -82,13 +94,13 @@ Grey::Grey(void) :
                    allowZombies(true),
                    floodAsPuffette(false),
                    nfaForceSize(0),
-                   nfaForceShifts(0),
                    maxHistoryAvailable(DEFAULT_MAX_HISTORY),
                    minHistoryAvailable(0), /* debugging only */
                    maxAnchoredRegion(63), /* for rose's atable to run over */
                    minRoseLiteralLength(3),
                    minRoseNetflowLiteralLength(2),
                    maxRoseNetflowEdges(50000), /* otherwise no netflow pass. */
+                   maxEditDistance(16),
                    minExtBoundedRepeatSize(32),
                    goughCopyPropagate(true),
                    goughRegisterAllocate(true),
@@ -96,8 +108,6 @@ Grey::Grey(void) :
                    roseGraphReduction(true),
                    roseRoleAliasing(true),
                    roseMasks(true),
-                   roseMaxBadLeafLength(5),
-                   roseConvertInfBadLeaves(true),
                    roseConvertFloodProneSuffixes(true),
                    roseMergeRosesDuringAliasing(true),
                    roseMultiTopRoses(true),
@@ -107,7 +117,6 @@ Grey::Grey(void) :
                    roseMcClellanSuffix(1),
                    roseMcClellanOutfix(2),
                    roseTransformDelay(true),
-                   roseDesiredSplit(4),
                    earlyMcClellanPrefix(true),
                    earlyMcClellanInfix(true),
                    earlyMcClellanSuffix(true),
@@ -120,6 +129,7 @@ Grey::Grey(void) :
                    equivalenceEnable(true),
 
                    allowSmallWrite(true), // McClellan dfas for small patterns
+                   allowSmallWriteSheng(false), // allow use of Sheng for SMWR
 
                    smallWriteLargestBuffer(70), // largest buffer that can be
                                                 // considered a small write
@@ -127,6 +137,11 @@ Grey::Grey(void) :
                                                 // are given to rose &co
                    smallWriteLargestBufferBad(35),
                    limitSmallWriteOutfixSize(1048576), // 1 MB
+                   smallWriteMaxPatterns(10000),
+                   smallWriteMaxLiterals(10000),
+                   smallWriteMergeBatchSize(20),
+                   allowTamarama(true), // Tamarama engine
+                   tamaChunkSize(100),
                    dumpFlags(0),
                    limitPatternCount(8000000), // 8M patterns
                    limitPatternLength(16000),  // 16K bytes
@@ -143,7 +158,8 @@ Grey::Grey(void) :
                    limitEngineSize(1073741824), // 1 GB
                    limitDFASize(1073741824), // 1 GB
                    limitNFASize(1048576), // 1 MB
-                   limitLBRSize(1048576) // 1 MB
+                   limitLBRSize(1048576), // 1 MB
+                   limitApproxMatchingVertices(5000)
 {
     assert(maxAnchoredRegion < 64); /* a[lm]_log_sum have limited capacity */
 }
@@ -195,6 +211,7 @@ void applyGreyOverrides(Grey *g, const string &s) {
         } while (0)
 
         G_UPDATE(optimiseComponentTree);
+        G_UPDATE(calcComponents);
         G_UPDATE(performGraphSimplification);
         G_UPDATE(prefilterReductions);
         G_UPDATE(removeEdgeRedundancy);
@@ -203,17 +220,28 @@ void applyGreyOverrides(Grey *g, const string &s) {
         G_UPDATE(allowLitHaig);
         G_UPDATE(allowLbr);
         G_UPDATE(allowMcClellan);
+        G_UPDATE(allowSheng);
+        G_UPDATE(allowMcSheng);
         G_UPDATE(allowPuff);
-        G_UPDATE(allowRose);
+        G_UPDATE(allowLiteral);
+        G_UPDATE(allowViolet);
         G_UPDATE(allowExtendedNFA);
         G_UPDATE(allowLimExNFA);
-        G_UPDATE(allowSidecar);
         G_UPDATE(allowAnchoredAcyclic);
         G_UPDATE(allowSmallLiteralSet);
         G_UPDATE(allowCastle);
         G_UPDATE(allowDecoratedLiteral);
         G_UPDATE(allowNoodle);
+        G_UPDATE(allowApproximateMatching);
         G_UPDATE(fdrAllowTeddy);
+        G_UPDATE(fdrAllowFlood);
+        G_UPDATE(violetAvoidSuffixes);
+        G_UPDATE(violetAvoidWeakInfixes);
+        G_UPDATE(violetDoubleCut);
+        G_UPDATE(violetExtractStrongLiterals);
+        G_UPDATE(violetLiteralChains);
+        G_UPDATE(violetDoubleCutLiteralLen);
+        G_UPDATE(violetEarlyCleanLiteralLen);
         G_UPDATE(puffImproveHead);
         G_UPDATE(castleExclusive);
         G_UPDATE(mergeSEP);
@@ -234,7 +262,6 @@ void applyGreyOverrides(Grey *g, const string &s) {
         G_UPDATE(allowZombies);
         G_UPDATE(floodAsPuffette);
         G_UPDATE(nfaForceSize);
-        G_UPDATE(nfaForceShifts);
         G_UPDATE(highlanderSquash);
         G_UPDATE(maxHistoryAvailable);
         G_UPDATE(minHistoryAvailable);
@@ -242,6 +269,7 @@ void applyGreyOverrides(Grey *g, const string &s) {
         G_UPDATE(minRoseLiteralLength);
         G_UPDATE(minRoseNetflowLiteralLength);
         G_UPDATE(maxRoseNetflowEdges);
+        G_UPDATE(maxEditDistance);
         G_UPDATE(minExtBoundedRepeatSize);
         G_UPDATE(goughCopyPropagate);
         G_UPDATE(goughRegisterAllocate);
@@ -249,8 +277,6 @@ void applyGreyOverrides(Grey *g, const string &s) {
         G_UPDATE(roseGraphReduction);
         G_UPDATE(roseRoleAliasing);
         G_UPDATE(roseMasks);
-        G_UPDATE(roseMaxBadLeafLength);
-        G_UPDATE(roseConvertInfBadLeaves);
         G_UPDATE(roseConvertFloodProneSuffixes);
         G_UPDATE(roseMergeRosesDuringAliasing);
         G_UPDATE(roseMultiTopRoses);
@@ -260,7 +286,6 @@ void applyGreyOverrides(Grey *g, const string &s) {
         G_UPDATE(roseMcClellanSuffix);
         G_UPDATE(roseMcClellanOutfix);
         G_UPDATE(roseTransformDelay);
-        G_UPDATE(roseDesiredSplit);
         G_UPDATE(earlyMcClellanPrefix);
         G_UPDATE(earlyMcClellanInfix);
         G_UPDATE(earlyMcClellanSuffix);
@@ -272,9 +297,15 @@ void applyGreyOverrides(Grey *g, const string &s) {
         G_UPDATE(miracleHistoryBonus);
         G_UPDATE(equivalenceEnable);
         G_UPDATE(allowSmallWrite);
+        G_UPDATE(allowSmallWriteSheng);
         G_UPDATE(smallWriteLargestBuffer);
         G_UPDATE(smallWriteLargestBufferBad);
         G_UPDATE(limitSmallWriteOutfixSize);
+        G_UPDATE(smallWriteMaxPatterns);
+        G_UPDATE(smallWriteMaxLiterals);
+        G_UPDATE(smallWriteMergeBatchSize);
+        G_UPDATE(allowTamarama);
+        G_UPDATE(tamaChunkSize);
         G_UPDATE(limitPatternCount);
         G_UPDATE(limitPatternLength);
         G_UPDATE(limitGraphVertices);
@@ -291,6 +322,7 @@ void applyGreyOverrides(Grey *g, const string &s) {
         G_UPDATE(limitDFASize);
         G_UPDATE(limitNFASize);
         G_UPDATE(limitLBRSize);
+        G_UPDATE(limitApproxMatchingVertices);
 
 #undef G_UPDATE
         if (key == "simple_som") {
@@ -311,7 +343,8 @@ void applyGreyOverrides(Grey *g, const string &s) {
             g->allowLitHaig = false;
             g->allowMcClellan = false;
             g->allowPuff = false;
-            g->allowRose = false;
+            g->allowLiteral = false;
+            g->allowViolet = false;
             g->allowSmallLiteralSet = false;
             g->roseMasks = false;
             done = true;
@@ -327,7 +360,8 @@ void applyGreyOverrides(Grey *g, const string &s) {
             g->allowLitHaig = false;
             g->allowMcClellan = true;
             g->allowPuff = false;
-            g->allowRose = false;
+            g->allowLiteral = false;
+            g->allowViolet = false;
             g->allowSmallLiteralSet = false;
             g->roseMasks = false;
             done = true;
@@ -343,7 +377,8 @@ void applyGreyOverrides(Grey *g, const string &s) {
             g->allowLitHaig = false;
             g->allowMcClellan = true;
             g->allowPuff = false;
-            g->allowRose = false;
+            g->allowLiteral = false;
+            g->allowViolet = false;
             g->allowSmallLiteralSet = false;
             g->roseMasks = false;
             done = true;

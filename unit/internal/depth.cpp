@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -29,9 +29,11 @@
 #include "config.h"
 
 #include "util/depth.h"
-#include "util/ue2_containers.h"
 #include "gtest/gtest.h"
 
+#include <unordered_set>
+
+using namespace std;
 using namespace ue2;
 
 static UNUSED
@@ -112,9 +114,10 @@ TEST(depth, add_finite) {
     ASSERT_EQ(depth(900), depth(1000) + s32{-100});
 
     // overflow must throw
+    depth max_depth(depth::max_value());
     depth d;
-    ASSERT_THROW(d = depth::max_value() + depth(1), DepthOverflowError);
-    ASSERT_THROW(d = depth::max_value() + 1, DepthOverflowError);
+    ASSERT_THROW(d = max_depth + depth(1), DepthOverflowError);
+    ASSERT_THROW(d = max_depth + 1, DepthOverflowError);
 
     // underflow must throw
     ASSERT_THROW(d = depth(0) + s32{-1}, DepthOverflowError);
@@ -264,14 +267,14 @@ TEST(depth, u64a_operators) {
 }
 
 TEST(depth, unordered_set) {
-    ue2::unordered_set<depth> depths;
+    unordered_set<depth> depths;
 
     for (const auto &val : finite_values) {
-        depths.insert(val);
+        depths.emplace(val);
     }
 
     for (const auto &val : finite_values) {
-        ASSERT_TRUE(depths.find(val) != depths.end());
+        ASSERT_TRUE(depths.find(depth(val)) != depths.end());
     }
 
     ASSERT_TRUE(depths.find(depth::infinity()) == depths.end());

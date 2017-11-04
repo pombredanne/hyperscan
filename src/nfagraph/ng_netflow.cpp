@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -37,6 +37,7 @@
 #include "ue2common.h"
 #include "util/container.h"
 #include "util/graph_range.h"
+#include "util/graph_small_color_map.h"
 
 #include <algorithm>
 #include <boost/graph/boykov_kolmogorov_max_flow.hpp>
@@ -92,7 +93,7 @@ void addReverseEdges(NGHolder &g, vector<NFAEdge> &reverseEdge,
         if (it == allEdges.end()) {
             // No reverse edge, add one.
             NFAVertex u = source(fwd, g), v = target(fwd, g);
-            NFAEdge rev = add_edge(v, u, g).first;
+            NFAEdge rev = add_edge(v, u, g);
             it = allEdges.insert(make_pair(make_pair(vidx, uidx), rev)).first;
             // Add to capacity map.
             u32 revIndex = g[rev].index;
@@ -111,13 +112,14 @@ static
 void removeEdgesFromIndex(NGHolder &g, vector<u64a> &capacityMap, u32 idx) {
     remove_edge_if([&](const NFAEdge &e) { return g[e].index >= idx; }, g);
     capacityMap.resize(idx);
+    renumber_edges(g);
 }
 
 /** A wrapper around boykov_kolmogorov_max_flow, returns the max flow and
  * colour map (from which we can find the min cut). */
 static
 u64a getMaxFlow(NGHolder &h, const vector<u64a> &capacityMap_in,
-                vector<default_color_type> &colorMap) {
+                decltype(make_small_color_map(NGHolder())) &colorMap) {
     vector<u64a> capacityMap = capacityMap_in;
     NFAVertex src = h.start;
     NFAVertex sink = h.acceptEod;
@@ -140,25 +142,23 @@ u64a getMaxFlow(NGHolder &h, const vector<u64a> &capacityMap_in,
     vector<u64a> edgeResiduals(numTotalEdges);
     vector<NFAEdge> predecessors(numVertices);
     vector<s32> distances(numVertices);
-    assert(colorMap.size() == numVertices);
 
-    const NFAGraph &g = h.g;
-    auto v_index_map = get(&NFAGraphVertexProps::index, g);
-    auto e_index_map = get(&NFAGraphEdgeProps::index, g);
+    auto v_index_map = get(vertex_index, h);
+    auto e_index_map = get(edge_index, h);
 
-    u64a flow = boykov_kolmogorov_max_flow(g,
+    u64a flow = boykov_kolmogorov_max_flow(h,
          make_iterator_property_map(capacityMap.begin(), e_index_map),
          make_iterator_property_map(edgeResiduals.begin(), e_index_map),
          make_iterator_property_map(reverseEdges.begin(), e_index_map),
          make_iterator_property_map(predecessors.begin(), v_index_map),
-         make_iterator_property_map(colorMap.begin(), v_index_map),
+         colorMap,
          make_iterator_property_map(distances.begin(), v_index_map),
          v_index_map,
          src, sink);
 
     // Remove reverse edges from graph.
     removeEdgesFromIndex(h, capacityMap, numRealEdges);
-    assert(num_edges(h.g) == numRealEdges);
+    assert(num_edges(h) == numRealEdges);
 
     DEBUG_PRINTF("flow = %llu\n", flow);
     return flow;
@@ -169,8 +169,8 @@ vector<NFAEdge> findMinCut(NGHolder &h, const vector<u64a> &scores) {
     assert(hasCorrectlyNumberedEdges(h));
     assert(hasCorrectlyNumberedVertices(h));
 
-    vector<default_color_type> colorMap(num_vertices(h));
-    u64a flow = getMaxFlow(h, scores, colorMap);
+    auto colors = make_small_color_map(h);
+    u64a flow = getMaxFlow(h, scores, colors);
 
     vector<NFAEdge> picked_white;
     vector<NFAEdge> picked_black;
@@ -185,19 +185,19 @@ vector<NFAEdge> findMinCut(NGHolder &h, const vector<u64a> &scores) {
             continue; // skips, among other things, reverse edges
         }
 
-        default_color_type fromColor = colorMap[h[from].index];
-        default_color_type toColor = colorMap[h[to].index];
+        auto fromColor = get(colors, from);
+        auto toColor = get(colors, to);
 
-        if (fromColor != boost::white_color && toColor == boost::white_color) {
+        if (fromColor != small_color::white && toColor == small_color::white) {
             assert(ec <= INVALID_EDGE_CAP);
-            DEBUG_PRINTF("found white cut edge %u->%u cap %llu\n",
+            DEBUG_PRINTF("found white cut edge %zu->%zu cap %llu\n",
                      h[from].index, h[to].index, ec);
             observed_white_flow += ec;
             picked_white.push_back(e);
         }
-        if (fromColor == boost::black_color && toColor != boost::black_color) {
+        if (fromColor == small_color::black && toColor != small_color::black) {
             assert(ec <= INVALID_EDGE_CAP);
-            DEBUG_PRINTF("found black cut edge %u->%u cap %llu\n",
+            DEBUG_PRINTF("found black cut edge %zu->%zu cap %llu\n",
                      h[from].index, h[to].index, ec);
             observed_black_flow += ec;
             picked_black.push_back(e);
@@ -206,7 +206,7 @@ vector<NFAEdge> findMinCut(NGHolder &h, const vector<u64a> &scores) {
 
     DEBUG_PRINTF("min flow = %llu b flow = %llu w flow %llu\n", flow,
                  observed_black_flow, observed_white_flow);
-    if (MIN(observed_white_flow, observed_black_flow) != flow) {
+    if (min(observed_white_flow, observed_black_flow) != flow) {
         DEBUG_PRINTF("bad cut\n");
     }
 

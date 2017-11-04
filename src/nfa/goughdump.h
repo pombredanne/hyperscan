@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2016, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -33,14 +33,14 @@
 
 #include "ue2common.h"
 
+#include <string>
+
 struct NFA;
 
 namespace ue2 {
 
-void nfaExecGough8_dumpDot(const NFA *nfa, FILE *file);
-void nfaExecGough16_dumpDot(const NFA *nfa, FILE *file);
-void nfaExecGough8_dumpText(const NFA *nfa, FILE *file);
-void nfaExecGough16_dumpText(const NFA *nfa, FILE *file);
+void nfaExecGough8_dump(const NFA *nfa, const std::string &base);
+void nfaExecGough16_dump(const NFA *nfa, const std::string &base);
 
 } // namespace ue2
 

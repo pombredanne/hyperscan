@@ -15,6 +15,8 @@ Hyperscan |version| Developer's Reference Guide
    getting_started
    compilation
    runtime
+   serialization
    performance
+   tools
    api_constants
    api_files

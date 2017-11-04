@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -28,7 +28,7 @@
 
 #include "config.h"
 
-#include "util/ue2_containers.h"
+#include "util/flat_containers.h"
 #include "ue2common.h"
 
 #include "gtest/gtest.h"
@@ -211,6 +211,7 @@ TEST(flat_map, custom_compare) {
     ASSERT_EQ(10, f.rbegin()->second);
 
     ASSERT_TRUE(flat_map_is_sorted(f));
+    ASSERT_TRUE(std::is_sorted(f.begin(), f.end(), f.value_comp()));
     ASSERT_TRUE(flat_map_is_sorted_cmp(f, std::greater<u32>()));
 }
 
@@ -400,4 +401,47 @@ TEST(flat_map, compare_ops) {
 TEST(flat_map, max_size) {
     flat_map<string, string> f;
     ASSERT_LE(1ULL << 24, f.max_size());
+}
+
+template<typename FlatMap>
+size_t hash_value(const FlatMap &f) {
+    return std::hash<FlatMap>()(f);
+}
+
+TEST(flat_map, hash_value) {
+    const vector<pair<u32, u32>> input = {
+        {0, 0}, {3, 1}, {76, 2}, {132, 3}, {77, 4}, {99999, 5}, {100, 6}};
+    for (size_t len = 0; len < input.size(); len++) {
+        flat_map<u32, u32> f1(input.begin(), input.begin() + len);
+        flat_map<u32, u32> f2(input.rbegin() + input.size() - len,
+                              input.rend());
+        EXPECT_EQ(hash_value(f1), hash_value(f2));
+
+        // Try removing an element.
+        auto f3 = f1;
+        EXPECT_EQ(hash_value(f1), hash_value(f3));
+        EXPECT_EQ(hash_value(f2), hash_value(f3));
+        if (!f3.empty()) {
+            f3.erase(f3.begin());
+            EXPECT_NE(hash_value(f1), hash_value(f3));
+            EXPECT_NE(hash_value(f2), hash_value(f3));
+        }
+
+        // Try adding an element.
+        f3 = f1;
+        EXPECT_EQ(hash_value(f1), hash_value(f3));
+        EXPECT_EQ(hash_value(f2), hash_value(f3));
+        f3.emplace(32767, 7);
+        EXPECT_NE(hash_value(f1), hash_value(f3));
+        EXPECT_NE(hash_value(f2), hash_value(f3));
+
+        // Change a value, but not a key.
+        f3 = f1;
+        EXPECT_EQ(hash_value(f1), hash_value(f3));
+        EXPECT_EQ(hash_value(f2), hash_value(f3));
+        f3.erase(77);
+        f3.emplace(77, 10);
+        EXPECT_NE(hash_value(f1), hash_value(f3));
+        EXPECT_NE(hash_value(f2), hash_value(f3));
+    }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -27,7 +27,8 @@
  */
 
 /**
- * Unit tests for checking the removeRedundancy code in nfagraph/ng_redundancy.cpp.
+ * Unit tests for checking the removeRedundancy code in
+ * nfagraph/ng_redundancy.cpp.
  */
 
 #include "config.h"
@@ -52,25 +53,27 @@ TEST(NFAGraph, RemoveRedundancy1) {
     // The character reachability should be merged into: [ab]c
     CompileContext cc(false, false, get_current_target(), Grey());
 
-    unique_ptr<NGWrapper> graph(constructGraphWithCC("(a|b)c", cc, 0));
+    auto graph(constructGraphWithCC("(a|b)c", cc, 0));
     ASSERT_TRUE(graph.get() != nullptr);
+    NGHolder &g = *graph;
 
     // Run removeRedundancy
-    removeRedundancy(*graph, SOM_NONE);
-    NFAGraph &g = graph->g;
+    removeRedundancy(g, SOM_NONE);
 
     // Our graph should only have two non-special nodes
-    ASSERT_EQ((size_t)N_SPECIALS + 2, num_vertices(*graph));
+    ASSERT_EQ((size_t)N_SPECIALS + 2, num_vertices(g));
 
-    // Dot-star start state should be connected to itself and a single other vertex
+    // Dot-star start state should be connected to itself and a single other
+    // vertex
     ASSERT_EQ(2U, out_degree(graph->startDs, g));
 
     // That single vertex should have reachability [ab]
-    NFAVertex v = NFAGraph::null_vertex();
-    NFAGraph::adjacency_iterator ai, ae;
-    for (tie(ai, ae) = adjacent_vertices(graph->startDs, g); ai != ae; ++ai) {
-        v = *ai;
-        if (v != graph->startDs) break;
+    NFAVertex v = NGHolder::null_vertex();
+    for (NFAVertex t : adjacent_vertices_range(graph->startDs, g)) {
+        v = t;
+        if (v != graph->startDs) {
+            break;
+        }
     }
     const CharReach &cr = g[v].char_reach;
     ASSERT_EQ(2U, cr.count());
@@ -92,46 +95,49 @@ TEST(NFAGraph, RemoveRedundancy2) {
     // Build a small graph with a redundant vertex: a.*b?c
     // The dot-star should swallow the 'b?', leaving a.*c
     CompileContext cc(false, false, get_current_target(), Grey());
-    unique_ptr<NGWrapper> graph(constructGraphWithCC("a.*b?c", cc,
-                                                     HS_FLAG_DOTALL));
+    auto graph(constructGraphWithCC("a.*b?c", cc, HS_FLAG_DOTALL));
     ASSERT_TRUE(graph.get() != nullptr);
+    NGHolder &g = *graph;
 
     // Run removeRedundancy
-    removeRedundancy(*graph, SOM_NONE);
-    NFAGraph &g = graph->g;
+    removeRedundancy(g, SOM_NONE);
 
     // Our graph should now have only 3 non-special vertices
-    ASSERT_EQ((size_t)N_SPECIALS + 3, num_vertices(*graph));
+    ASSERT_EQ((size_t)N_SPECIALS + 3, num_vertices(g));
 
-    // Dot-star start state should be connected to itself and a single other vertex
+    // Dot-star start state should be connected to itself and a single other
+    // vertex
     ASSERT_EQ(2U, out_degree(graph->startDs, g));
 
     // That single vertex should have reachability [a]
-    NFAVertex v = NFAGraph::null_vertex();
-    NFAGraph::adjacency_iterator ai, ae;
-    for (tie(ai, ae) = adjacent_vertices(graph->startDs, g); ai != ae; ++ai) {
-        v = *ai;
-        if (v != graph->startDs) break;
+    NFAVertex v = NGHolder::null_vertex();
+    for (NFAVertex t : adjacent_vertices_range(graph->startDs, g)) {
+        v = t;
+        if (v != graph->startDs) {
+            break;
+        }
     }
     const CharReach &cr = g[v].char_reach;
     ASSERT_EQ(1U, cr.count());
     ASSERT_TRUE(cr.test('a'));
 
-    // 'a' should have two out edges: one to a dot with a cycle (.*) and one to 'c'
+    // 'a' should have two out edges: one to a dot with a cycle (.*) and one to
+    // 'c'
     ASSERT_EQ(2U, out_degree(v, g));
-    NFAVertex dotstar = NFAGraph::null_vertex(), vc = NFAGraph::null_vertex();
-    for (tie(ai, ae) = adjacent_vertices(v, g); ai != ae; ++ai) {
-        const CharReach &cr2 = g[*ai].char_reach;
+    NFAVertex dotstar = NGHolder::null_vertex();
+    NFAVertex vc = NGHolder::null_vertex();
+    for (NFAVertex t : adjacent_vertices_range(v, g)) {
+        const CharReach &cr2 = g[t].char_reach;
         if (cr2.count() == 1 && cr2.test('c')) {
-            vc = *ai;
+            vc = t;
         } else if (cr2.all()) {
-            dotstar = *ai;
+            dotstar = t;
         } else {
             FAIL();
         }
     }
-    ASSERT_TRUE(vc != NFAGraph::null_vertex());
-    ASSERT_TRUE(dotstar != NFAGraph::null_vertex());
+    ASSERT_TRUE(vc != NGHolder::null_vertex());
+    ASSERT_TRUE(dotstar != NGHolder::null_vertex());
 
     // Dot-star node should have a self-loop and an edge to vertex 'c'
     ASSERT_EQ(2U, out_degree(dotstar, g));
@@ -145,42 +151,40 @@ TEST(NFAGraph, RemoveRedundancy2) {
 
 TEST(NFAGraph, RemoveRedundancy3) {
     CompileContext cc(false, false, get_current_target(), Grey());
-    unique_ptr<NGWrapper> graph(constructGraphWithCC("foobar.*(a|b)?teakettle",
-                                                     cc, 0));
+    auto graph(constructGraphWithCC("foobar.*(a|b)?teakettle", cc, 0));
     ASSERT_TRUE(graph.get() != nullptr);
 
-    unsigned countBefore = num_vertices(graph->g);
+    unsigned countBefore = num_vertices(*graph);
     removeRedundancy(*graph, SOM_NONE);
 
     // The '(a|b)?' construction (two states) should have disappeared, leaving
     // this expr as 'foobar.*teakettle'
-    ASSERT_EQ(countBefore - 2, num_vertices(graph->g));
+    ASSERT_EQ(countBefore - 2, num_vertices(*graph));
 }
 
 TEST(NFAGraph, RemoveRedundancy4) {
     CompileContext cc(false, false, get_current_target(), Grey());
-    unique_ptr<NGWrapper> graph(constructGraphWithCC("foo([A-Z]|a|b|q)", cc, 0));
+    auto graph(constructGraphWithCC("foo([A-Z]|a|b|q)", cc, 0));
     ASSERT_TRUE(graph.get() != nullptr);
 
-    unsigned countBefore = num_vertices(graph->g);
+    unsigned countBefore = num_vertices(*graph);
     removeRedundancy(*graph, SOM_NONE);
 
     // We should end up with the alternation collapsing into one state
-    ASSERT_EQ(countBefore - 3, num_vertices(graph->g));
+    ASSERT_EQ(countBefore - 3, num_vertices(*graph));
 }
 
 TEST(NFAGraph, RemoveRedundancy5) {
     CompileContext cc(false, false, get_current_target(), Grey());
-    unique_ptr<NGWrapper> graph(constructGraphWithCC("[0-9]?badgerbrush",
-            cc, 0));
+    auto graph(constructGraphWithCC("[0-9]?badgerbrush", cc, 0));
     ASSERT_TRUE(graph.get() != nullptr);
 
-    unsigned countBefore = num_vertices(graph->g);
+    unsigned countBefore = num_vertices(*graph);
     removeRedundancy(*graph, SOM_NONE);
 
     // Since we don't return a start offset, the first state ('[0-9]?') is
     // redundant.
-    ASSERT_EQ(countBefore - 1, num_vertices(graph->g));
+    ASSERT_EQ(countBefore - 1, num_vertices(*graph));
 }
 
 TEST(NFAGraph, RemoveEdgeRedundancy1) {
@@ -189,12 +193,12 @@ TEST(NFAGraph, RemoveEdgeRedundancy1) {
     auto graph = constructGraphWithCC("A+hatstand", cc, HS_FLAG_DOTALL);
     ASSERT_TRUE(graph.get() != nullptr);
 
-    unsigned countBefore = num_edges(graph->g);
+    unsigned countBefore = num_edges(*graph);
 
     removeEdgeRedundancy(*graph, SOM_NONE, cc);
 
     // One edge (the self-loop on the leading A+) should have been removed.
-    ASSERT_EQ(countBefore - 1, num_edges(graph->g));
+    ASSERT_EQ(countBefore - 1, num_edges(*graph));
 }
 
 TEST(NFAGraph, RemoveEdgeRedundancy2) {
@@ -203,12 +207,12 @@ TEST(NFAGraph, RemoveEdgeRedundancy2) {
     auto graph = constructGraphWithCC("foo.*A*bar", cc, HS_FLAG_DOTALL);
     ASSERT_TRUE(graph.get() != nullptr);
 
-    size_t numEdgesBefore = num_edges(graph->g);
-    size_t numVertsBefore = num_vertices(graph->g);
+    size_t numEdgesBefore = num_edges(*graph);
+    size_t numVertsBefore = num_vertices(*graph);
 
     removeEdgeRedundancy(*graph, SOM_NONE, cc);
 
     // The .* should swallow up the A* and its self-loop.
-    ASSERT_EQ(numEdgesBefore - 4, num_edges(graph->g));
-    ASSERT_EQ(numVertsBefore - 1, num_vertices(graph->g));
+    ASSERT_EQ(numEdgesBefore - 4, num_edges(*graph));
+    ASSERT_EQ(numVertsBefore - 1, num_vertices(*graph));
 }

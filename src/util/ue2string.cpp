@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -29,11 +29,15 @@
 /** \file
  * \brief Tools for string manipulation, ue2_literal definition.
  */
-#include "charreach.h"
-#include "compare.h"
+
 #include "ue2string.h"
 
+#include "charreach.h"
+#include "compare.h"
+#include "hash_dynamic_bitset.h"
+
 #include <algorithm>
+#include <cstring>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -129,7 +133,9 @@ string dumpString(const ue2_literal &lit) {
 #endif
 
 void upperString(string &s) {
-    transform(s.begin(), s.end(), s.begin(), (int(*)(int)) mytoupper);
+    for (auto &c : s) {
+        c = mytoupper(c);
+    }
 }
 
 size_t maxStringOverlap(const string &a, const string &b, bool nocase) {
@@ -173,7 +179,16 @@ size_t maxStringSelfOverlap(const string &a, bool nocase) {
 }
 
 u32 cmp(const char *a, const char *b, size_t len, bool nocase) {
-    return cmpForward((const u8 *)a, (const u8 *)b, len, nocase);
+    if (!nocase) {
+        return memcmp(a, b, len);
+    }
+
+    for (const auto *a_end = a + len; a < a_end; a++, b++) {
+        if (mytoupper(*a) != mytoupper(*b)) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 case_iter::case_iter(const ue2_literal &ss) : s(ss.get_string()),
@@ -222,13 +237,15 @@ ue2_literal::elem::operator CharReach () const {
     }
 }
 
+const ue2_literal::size_type ue2_literal::npos = std::string::npos;
+
 ue2_literal::ue2_literal(const std::string &s_in, bool nc_in)
-    : s(nc_in ? toUpperString(s_in) : s_in), nocase(s_in.size(), nc_in) {
+    : s(nc_in ? toUpperString(s_in) : s_in), nocase(s_in.size()) {
     if (nc_in) {
-        // Quash nocase bit for non-alpha chars
+        // Switch on nocase bit for all alpha characters.
         for (size_t i = 0; i < s.length(); i++) {
-            if (!ourisalpha(s[i])) {
-                nocase[i] = false;
+            if (ourisalpha(s[i])) {
+                nocase.set(i);
             }
         }
     }
@@ -241,21 +258,27 @@ ue2_literal ue2_literal::substr(size_type pos, size_type n) const {
     ue2_literal rv;
     rv.s = s.substr(pos, n);
     size_type upper = nocase.size();
-    if (n != string::npos && n + pos < nocase.size()) {
+    if (n != npos && n + pos < nocase.size()) {
         upper = n + pos;
     }
-    rv.nocase.insert(rv.nocase.end(), nocase.begin() + pos,
-                     nocase.begin() + upper);
+
+    rv.nocase.resize(upper - pos, false);
+    for (size_t i = pos; i < upper; i++) {
+        rv.nocase.set(i - pos, nocase.test(i));
+    }
+    assert(s.size() == nocase.size());
     return rv;
 }
 
 ue2_literal &ue2_literal::erase(size_type pos, size_type n) {
     s.erase(pos, n);
-    size_type upper = nocase.size();
-    if (n != string::npos && n + pos < nocase.size()) {
-        upper = n + pos;
+
+    if (n != npos) {
+        for (size_type i = pos + n; i < nocase.size(); i++) {
+            nocase.set(i - n, nocase.test(i));
+        }
     }
-    nocase.erase(nocase.begin() + pos, nocase.begin() + upper);
+    nocase.resize(s.size());
     return *this;
 }
 
@@ -268,18 +291,24 @@ void ue2_literal::push_back(char c, bool nc) {
     s.push_back(c);
 }
 
+void ue2_literal::reverse() {
+    std::reverse(s.begin(), s.end());
+
+    const size_t len = nocase.size();
+    for (size_t i = 0; i < len / 2; i++) {
+        size_t j = len - i - 1;
+        bool a = nocase.test(i);
+        bool b = nocase.test(j);
+        nocase.set(i, b);
+        nocase.set(j, a);
+    }
+}
+
 // Return a copy of this literal in reverse order.
 ue2_literal reverse_literal(const ue2_literal &in) {
-    ue2_literal rv;
-    if (in.empty()) {
-        return rv;
-    }
-
-    for (ue2_literal::const_iterator it = in.end(); it != in.begin();) {
-        --it;
-        rv.push_back(it->c, it->nocase);
-    }
-    return rv;
+    auto out = in;
+    out.reverse();
+    return out;
 }
 
 bool ue2_literal::operator<(const ue2_literal &b) const {
@@ -292,46 +321,28 @@ bool ue2_literal::operator<(const ue2_literal &b) const {
     return nocase < b.nocase;
 }
 
-ue2_literal operator+(const ue2_literal &a, const ue2_literal &b) {
-    ue2_literal rv;
-    rv.s = a.s + b.s;
-    rv.nocase = a.nocase;
-    rv.nocase.insert(rv.nocase.end(), b.nocase.begin(), b.nocase.end());
-    return rv;
-}
-
 void ue2_literal::operator+=(const ue2_literal &b) {
     s += b.s;
-    nocase.insert(nocase.end(), b.nocase.begin(), b.nocase.end());
+    size_t prefix = nocase.size();
+    nocase.resize(prefix + b.nocase.size());
+    for (size_t i = 0; i < b.nocase.size(); i++) {
+        nocase.set(prefix + i, b.nocase[i]);
+    }
 }
 
 bool ue2_literal::any_nocase() const {
-    return find(nocase.begin(), nocase.end(), true) != nocase.end();
+    return nocase.any();
 }
 
-bool mixed_sensitivity(const ue2_literal &s) {
-    bool cs = false;
-    bool nc = false;
-    for (ue2_literal::const_iterator it = s.begin(); it != s.end(); ++it) {
-        if (!ourisalpha(it->c)) {
-            continue;
-        }
-        if (it->nocase) {
-            nc = true;
-        } else {
-            cs = true;
-        }
-    }
-
-    return cs && nc;
+size_t ue2_literal::hash() const {
+    return hash_all(s, hash_dynamic_bitset()(nocase));
 }
 
 void make_nocase(ue2_literal *lit) {
     ue2_literal rv;
 
-    for (ue2_literal::const_iterator it = lit->begin(); it != lit->end();
-         ++it) {
-        rv.push_back(it->c, ourisalpha(it->c));
+    for (const auto &elem: *lit) {
+        rv.push_back(elem.c, ourisalpha(elem.c));
     }
 
     lit->swap(rv);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -47,7 +47,7 @@ TEST(Shufti, BuildMask1) {
 
     chars.set('a');
 
-    int ret = shuftiBuildMasks(chars, &lomask, &himask);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lomask, (u8 *)&himask);
     ASSERT_NE(-1, ret);
 
     u8 *lo = (u8 *)&lomask;
@@ -75,7 +75,7 @@ TEST(Shufti, BuildMask2) {
     chars.set('a');
     chars.set('B');
 
-    int ret = shuftiBuildMasks(chars, &lomask, &himask);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lomask, (u8 *)&himask);
     ASSERT_NE(-1, ret);
 
     u8 *lo = (u8 *)&lomask;
@@ -96,7 +96,7 @@ TEST(Shufti, BuildMask4) {
     chars.set('A');
     chars.set('b');
 
-    int ret = shuftiBuildMasks(chars, &lomask, &himask);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lomask, (u8 *)&himask);
     ASSERT_NE(-1, ret);
 
     u8 *lo = (u8 *)&lomask;
@@ -113,12 +113,12 @@ TEST(Shufti, ExecNoMatch1) {
     CharReach chars;
     chars.set('a');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    for (size_t i = 0; i < 16; i++) {
+    for (size_t i = 0; i < 32; i++) {
         const u8 *rv = shuftiExec(lo, hi, (u8 *)t1 + i, (u8 *)t1 + strlen(t1));
 
         ASSERT_LE(((size_t)t1 + strlen(t1)) & ~0xf, (size_t)rv);
@@ -132,7 +132,7 @@ TEST(Shufti, ExecNoMatch2) {
     chars.set('a');
     chars.set('B');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -150,7 +150,7 @@ TEST(Shufti, ExecNoMatch3) {
     CharReach chars;
     chars.set('V'); /* V = 0x56, e = 0x65 */
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     char t1[] = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
@@ -168,16 +168,16 @@ TEST(Shufti, ExecMatch1) {
     CharReach chars;
     chars.set('a');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     /*          0123456789012345678901234567890 */
-    char t1[] = "bbbbbbbbbbbbbbbbbabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbabbbbbbbbbbbb";
+    char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbabbbbbbbbbbbbbbabbbbbbbbbbbb";
 
-    for (size_t i = 0; i < 16; i++) {
+    for (size_t i = 0; i < 32; i++) {
         const u8 *rv = shuftiExec(lo, hi, (u8 *)t1 + i, (u8 *)t1 + strlen(t1));
 
-        ASSERT_EQ((size_t)t1 + 17, (size_t)rv);
+        ASSERT_EQ((size_t)t1 + 33, (size_t)rv);
     }
 }
 
@@ -187,7 +187,7 @@ TEST(Shufti, ExecMatch2) {
     CharReach chars;
     chars.set('a');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     /*          0123456789012345678901234567890 */
@@ -207,7 +207,7 @@ TEST(Shufti, ExecMatch3) {
     chars.set('a');
     chars.set('B');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     /*          0123456789012345678901234567890 */
@@ -229,7 +229,7 @@ TEST(Shufti, ExecMatch4) {
     chars.set('A');
     chars.set('c');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     /*          0123456789012345678901234567890 */
@@ -263,7 +263,7 @@ TEST(Shufti, ExecMatch5) {
     CharReach chars;
     chars.set('a');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -283,7 +283,9 @@ TEST(DoubleShufti, BuildMask1) {
 
     lits.insert(make_pair('a', 'B'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1m, &hi1m, &lo2m, &hi2m);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1m, (u8 *)&hi1m,
+                                     (u8 *)&lo2m, (u8 *)&hi2m);
+    ASSERT_TRUE(ret);
 
     u8 *lo1 = (u8 *)&lo1m;
     u8 *lo2 = (u8 *)&lo2m;
@@ -324,7 +326,9 @@ TEST(DoubleShufti, BuildMask2) {
     lits.insert(make_pair('a','z'));
     lits.insert(make_pair('B','z'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1m, &hi1m, &lo2m, &hi2m);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1m, (u8 *)&hi1m,
+                                     (u8 *)&lo2m, (u8 *)&hi2m);
+    ASSERT_TRUE(ret);
 
     u8 *lo1 = (u8 *)&lo1m;
     u8 *lo2 = (u8 *)&lo2m;
@@ -350,7 +354,9 @@ TEST(DoubleShufti, BuildMask4) {
     lits.insert(make_pair('A','z'));
     lits.insert(make_pair('b','z'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1m, &hi1m, &lo2m, &hi2m);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1m, (u8 *)&hi1m,
+                                     (u8 *)&lo2m, (u8 *)&hi2m);
+    ASSERT_TRUE(ret);
 
     u8 *lo1 = (u8 *)&lo1m;
     u8 *lo2 = (u8 *)&lo2m;
@@ -377,7 +383,9 @@ TEST(DoubleShufti, BuildMask5) {
     CharReach bytes;
     bytes.set('X');
 
-    shuftiBuildDoubleMasks(bytes, lits, &lo1m, &hi1m, &lo2m, &hi2m);
+    bool ret = shuftiBuildDoubleMasks(bytes, lits, (u8 *)&lo1m, (u8 *)&hi1m,
+                                     (u8 *)&lo2m, (u8 *)&hi2m);
+    ASSERT_TRUE(ret);
 
     u8 *lo1 = (u8 *)&lo1m;
     u8 *lo2 = (u8 *)&lo2m;
@@ -395,6 +403,81 @@ TEST(DoubleShufti, BuildMask5) {
               lo1['B' % 16] | hi1['B' >> 4] | lo2['X' % 16] | hi2['X' >> 4]);
 }
 
+TEST(DoubleShufti, BuildMask6) {
+    m128 lo1m, hi1m, lo2m, hi2m;
+
+    flat_set<pair<u8, u8>> lits;
+
+    lits.insert(make_pair('a','z'));
+    lits.insert(make_pair('B','z'));
+    lits.insert(make_pair('A','z'));
+    lits.insert(make_pair('b','z'));
+    lits.insert(make_pair('a','y'));
+    lits.insert(make_pair('B','y'));
+    lits.insert(make_pair('A','y'));
+    lits.insert(make_pair('b','y'));
+    lits.insert(make_pair('a','x'));
+    lits.insert(make_pair('B','x'));
+    lits.insert(make_pair('A','x'));
+    lits.insert(make_pair('b','x'));
+
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1m, (u8 *)&hi1m,
+                                     (u8 *)&lo2m, (u8 *)&hi2m);
+    ASSERT_TRUE(ret);
+
+    u8 *lo1 = (u8 *)&lo1m;
+    u8 *lo2 = (u8 *)&lo2m;
+    u8 *hi1 = (u8 *)&hi1m;
+    u8 *hi2 = (u8 *)&hi2m;
+    ASSERT_NE(0xff,
+              lo1['a' % 16] | hi1['a' >> 4] | lo2['z' % 16] | hi2['z' >> 4]);
+    ASSERT_NE(0xff,
+              lo1['A' % 16] | hi1['A' >> 4] | lo2['z' % 16] | hi2['z' >> 4]);
+    ASSERT_NE(0xff,
+              lo1['b' % 16] | hi1['b' >> 4] | lo2['z' % 16] | hi2['z' >> 4]);
+    ASSERT_NE(0xff,
+              lo1['B' % 16] | hi1['B' >> 4] | lo2['z' % 16] | hi2['z' >> 4]);
+    ASSERT_NE(0xff,
+              lo1['a' % 16] | hi1['a' >> 4] | lo2['y' % 16] | hi2['y' >> 4]);
+    ASSERT_NE(0xff,
+              lo1['A' % 16] | hi1['A' >> 4] | lo2['y' % 16] | hi2['y' >> 4]);
+    ASSERT_NE(0xff,
+              lo1['b' % 16] | hi1['b' >> 4] | lo2['y' % 16] | hi2['y' >> 4]);
+    ASSERT_NE(0xff,
+              lo1['B' % 16] | hi1['B' >> 4] | lo2['y' % 16] | hi2['y' >> 4]);
+    ASSERT_NE(0xff,
+              lo1['a' % 16] | hi1['a' >> 4] | lo2['x' % 16] | hi2['x' >> 4]);
+    ASSERT_NE(0xff,
+              lo1['A' % 16] | hi1['A' >> 4] | lo2['x' % 16] | hi2['x' >> 4]);
+    ASSERT_NE(0xff,
+              lo1['b' % 16] | hi1['b' >> 4] | lo2['x' % 16] | hi2['x' >> 4]);
+    ASSERT_NE(0xff,
+              lo1['B' % 16] | hi1['B' >> 4] | lo2['x' % 16] | hi2['x' >> 4]);
+}
+
+TEST(DoubleShufti, BuildMask7) {
+    m128 lo1m, hi1m, lo2m, hi2m;
+
+    flat_set<pair<u8, u8>> lits;
+
+    lits.insert(make_pair('a','b'));
+    lits.insert(make_pair('c','d'));
+    lits.insert(make_pair('e','f'));
+    lits.insert(make_pair('g','h'));
+    lits.insert(make_pair('i','j'));
+    lits.insert(make_pair('k','l'));
+    lits.insert(make_pair('m','n'));
+    lits.insert(make_pair('o','p'));
+    lits.insert(make_pair('q','r'));
+    lits.insert(make_pair('s','t'));
+    lits.insert(make_pair('u','v'));
+    lits.insert(make_pair('w','x'));
+
+    bool rv = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1m, (u8 *)&hi1m,
+                                     (u8 *)&lo2m, (u8 *)&hi2m);
+    ASSERT_FALSE(rv);
+}
+
 TEST(DoubleShufti, ExecNoMatch1) {
     m128 lo1, hi1, lo2, hi2;
 
@@ -402,7 +485,9 @@ TEST(DoubleShufti, ExecNoMatch1) {
 
     lits.insert(make_pair('a','b'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                     (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -421,7 +506,9 @@ TEST(DoubleShufti, ExecNoMatch1b) {
 
     lits.insert(make_pair('b','a'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -441,7 +528,9 @@ TEST(DoubleShufti, ExecNoMatch2) {
     lits.insert(make_pair('a','b'));
     lits.insert(make_pair('B','b'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -461,13 +550,15 @@ TEST(DoubleShufti, ExecNoMatch2b) {
     lits.insert(make_pair('b','a'));
     lits.insert(make_pair('b','B'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     for (size_t i = 0; i < 16; i++) {
-        const u8 *rv = shuftiDoubleExec(lo1, hi1, lo2, hi2,
-                                        (u8 *)t1 + i, (u8 *)t1 + strlen(t1));
+        const u8 *rv = shuftiDoubleExec(lo1, hi1, lo2, hi2, (u8 *)t1 + i,
+                                        (u8 *)t1 + strlen(t1));
 
         ASSERT_EQ((size_t)t1 + i + 15, (size_t)rv);
     }
@@ -480,7 +571,9 @@ TEST(DoubleShufti, ExecNoMatch3) {
 
     lits.insert(make_pair('V','e'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     char t1[] = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
@@ -499,7 +592,9 @@ TEST(DoubleShufti, ExecNoMatch3b) {
 
     lits.insert(make_pair('e','V'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     char t1[] = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
@@ -511,6 +606,28 @@ TEST(DoubleShufti, ExecNoMatch3b) {
     }
 }
 
+TEST(DoubleShufti, ExecMatchShort1) {
+    m128 lo1, hi1, lo2, hi2;
+
+    flat_set<pair<u8, u8>> lits;
+
+    lits.insert(make_pair('a','b'));
+
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
+
+    /*          0123456789012345678901234567890 */
+    char t1[] = "bbbbbbbbbbbbbbbbbabbbbbbbbbbbbbbbbb";
+
+    for (size_t i = 0; i < 16; i++) {
+        const u8 *rv = shuftiDoubleExec(lo1, hi1, lo2, hi2,
+                                        (u8 *)t1 + i, (u8 *)t1 + strlen(t1));
+
+        ASSERT_EQ((size_t)t1 + 17, (size_t)rv);
+    }
+}
+
 TEST(DoubleShufti, ExecMatch1) {
     m128 lo1, hi1, lo2, hi2;
 
@@ -518,7 +635,9 @@ TEST(DoubleShufti, ExecMatch1) {
 
     lits.insert(make_pair('a','b'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     /*          0123456789012345678901234567890 */
     char t1[] = "bbbbbbbbbbbbbbbbbabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbabbbbbbbbbbbb";
@@ -538,7 +657,9 @@ TEST(DoubleShufti, ExecMatch2) {
 
     lits.insert(make_pair('a','a'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     /*          0123456789012345678901234567890 */
     char t1[] = "bbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbabbbbbbbbbbbb";
@@ -559,7 +680,9 @@ TEST(DoubleShufti, ExecMatch3) {
     lits.insert(make_pair('B','a'));
     lits.insert(make_pair('a','a'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     /*          0123456789012345678901234567890 */
     char t1[] = "bbbbbbbbbbbbbbbbbBaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbabbbbbbbbbbbb";
@@ -582,8 +705,9 @@ TEST(DoubleShufti, ExecMatch4) {
     lits.insert(make_pair('C','a'));
     lits.insert(make_pair('c','a'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1, &hi1, &lo2, &hi2);
-
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     /*          0123456789012345678901234567890 */
     char t1[] = "bbbbbbbbbbbbbbbbbAaaaaaaaaaaaaaaabbbbbbbbbbbbbbbabbbbbbbbbbbb";
@@ -624,8 +748,9 @@ TEST(DoubleShufti, ExecMatch4b) {
     lits.insert(make_pair('a','C'));
     lits.insert(make_pair('a','c'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1, &hi1, &lo2, &hi2);
-
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     /*          0123456789012345678901234567890 */
     char t1[] = "bbbbbbbbbbbbbbbbbaAaaaaaaaaaaaaaabbbbbbbbbbbbbbbabbbbbbbbbbbb";
@@ -663,7 +788,9 @@ TEST(DoubleShufti, ExecMatch5) {
 
     lits.insert(make_pair('a','A'));
 
-    shuftiBuildDoubleMasks(CharReach(), lits, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(CharReach(), lits, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -686,7 +813,9 @@ TEST(DoubleShufti, ExecMatchMixed1) {
     // just one one-byte literal
     onebyte.set('a');
 
-    shuftiBuildDoubleMasks(onebyte, twobyte, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(onebyte, twobyte, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -709,7 +838,9 @@ TEST(DoubleShufti, ExecMatchMixed2) {
     onebyte.set('a');
     twobyte.insert(make_pair('x', 'y'));
 
-    shuftiBuildDoubleMasks(onebyte, twobyte, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(onebyte, twobyte, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     char t2[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -742,7 +873,9 @@ TEST(DoubleShufti, ExecMatchMixed3) {
     onebyte.set('a');
     twobyte.insert(make_pair('x', 'y'));
 
-    shuftiBuildDoubleMasks(onebyte, twobyte, &lo1, &hi1, &lo2, &hi2);
+    bool ret = shuftiBuildDoubleMasks(onebyte, twobyte, (u8 *)&lo1, (u8 *)&hi1,
+                                      (u8 *)&lo2, (u8 *)&hi2);
+    ASSERT_TRUE(ret);
 
     const int len = 420;
     char t1[len + 1];
@@ -774,15 +907,16 @@ TEST(ReverseShufti, ExecNoMatch1) {
     CharReach chars;
     chars.set('a');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
-    char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    char t[] = " bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    char *t1 = t + 1;
     size_t len = strlen(t1);
 
     for (size_t i = 0; i < 16; i++) {
         const u8 *rv = rshuftiExec(lo, hi, (u8 *)t1, (u8 *)t1 + len - i);
-        ASSERT_EQ((const u8 *)(t1 - 1), rv);
+        ASSERT_EQ((const u8 *)t, rv);
     }
 }
 
@@ -793,15 +927,16 @@ TEST(ReverseShufti, ExecNoMatch2) {
     chars.set('a');
     chars.set('B');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
-    char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    char t[] = " bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    char *t1 = t + 1;
     size_t len = strlen(t1);
 
     for (size_t i = 0; i < 16; i++) {
         const u8 *rv = rshuftiExec(lo, hi, (u8 *)t1, (u8 *)t1 + len - i);
-        ASSERT_EQ((const u8 *)(t1 - 1), rv);
+        ASSERT_EQ((const u8 *)t, rv);
     }
 }
 
@@ -811,15 +946,16 @@ TEST(ReverseShufti, ExecNoMatch3) {
     CharReach chars;
     chars.set('V'); /* V = 0x56, e = 0x65 */
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
-    char t1[] = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    char t[] = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    char *t1 = t + 1;
     size_t len = strlen(t1);
 
     for (size_t i = 0; i < 16; i++) {
         const u8 *rv = rshuftiExec(lo, hi, (u8 *)t1, (u8 *)t1 + len - i);
-        ASSERT_EQ((const u8 *)(t1 - 1), rv);
+        ASSERT_EQ((const u8 *)t, rv);
     }
 }
 
@@ -829,7 +965,7 @@ TEST(ReverseShufti, ExecMatch1) {
     CharReach chars;
     chars.set('a');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     /*          0123456789012345678901234567890 */
@@ -850,7 +986,7 @@ TEST(ReverseShufti, ExecMatch2) {
     CharReach chars;
     chars.set('a');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     /*          0123456789012345678901234567890 */
@@ -872,7 +1008,7 @@ TEST(ReverseShufti, ExecMatch3) {
     chars.set('a');
     chars.set('B');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     /*          0123456789012345678901234567890 */
@@ -906,7 +1042,7 @@ TEST(ReverseShufti, ExecMatch4) {
     chars.set('A');
     chars.set('c');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     /*          0123456789012345678901234567890 */
@@ -941,7 +1077,7 @@ TEST(ReverseShufti, ExecMatch5) {
     CharReach chars;
     chars.set('a');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     char t1[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -961,7 +1097,7 @@ TEST(ReverseShufti, ExecMatch6) {
     CharReach chars;
     chars.set('a');
 
-    int ret = shuftiBuildMasks(chars, &lo, &hi);
+    int ret = shuftiBuildMasks(chars, (u8 *)&lo, (u8 *)&hi);
     ASSERT_NE(-1, ret);
 
     const size_t len = 256;

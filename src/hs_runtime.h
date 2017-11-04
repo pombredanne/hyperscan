@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -145,8 +145,8 @@ typedef int (*match_event_handler)(unsigned int id,
  * @return
  *      @ref HS_SUCCESS on success, other values on failure.
  */
-hs_error_t hs_open_stream(const hs_database_t *db, unsigned int flags,
-                          hs_stream_t **stream);
+hs_error_t HS_CDECL hs_open_stream(const hs_database_t *db, unsigned int flags,
+                                   hs_stream_t **stream);
 
 /**
  * Write data to be scanned to the opened stream.
@@ -185,10 +185,10 @@ hs_error_t hs_open_stream(const hs_database_t *db, unsigned int flags,
  *      match callback indicated that scanning should stop; other values on
  *      error.
  */
-hs_error_t hs_scan_stream(hs_stream_t *id, const char *data,
-                          unsigned int length, unsigned int flags,
-                          hs_scratch_t *scratch, match_event_handler onEvent,
-                          void *ctxt);
+hs_error_t HS_CDECL hs_scan_stream(hs_stream_t *id, const char *data,
+                                   unsigned int length, unsigned int flags,
+                                   hs_scratch_t *scratch,
+                                   match_event_handler onEvent, void *ctxt);
 
 /**
  * Close a stream.
@@ -223,8 +223,8 @@ hs_error_t hs_scan_stream(hs_stream_t *id, const char *data,
  * @return
  *      Returns @ref HS_SUCCESS on success, other values on failure.
  */
-hs_error_t hs_close_stream(hs_stream_t *id, hs_scratch_t *scratch,
-                           match_event_handler onEvent, void *ctxt);
+hs_error_t HS_CDECL hs_close_stream(hs_stream_t *id, hs_scratch_t *scratch,
+                                    match_event_handler onEvent, void *ctxt);
 
 /**
  * Reset a stream to an initial state.
@@ -264,9 +264,9 @@ hs_error_t hs_close_stream(hs_stream_t *id, hs_scratch_t *scratch,
  * @return
  *      @ref HS_SUCCESS on success, other values on failure.
  */
-hs_error_t hs_reset_stream(hs_stream_t *id, unsigned int flags,
-                           hs_scratch_t *scratch, match_event_handler onEvent,
-                           void *context);
+hs_error_t HS_CDECL hs_reset_stream(hs_stream_t *id, unsigned int flags,
+                                    hs_scratch_t *scratch,
+                                    match_event_handler onEvent, void *context);
 
 /**
  * Duplicate the given stream. The new stream will have the same state as the
@@ -282,7 +282,8 @@ hs_error_t hs_reset_stream(hs_stream_t *id, unsigned int flags,
  * @return
  *      @ref HS_SUCCESS on success, other values on failure.
  */
-hs_error_t hs_copy_stream(hs_stream_t **to_id, const hs_stream_t *from_id);
+hs_error_t HS_CDECL hs_copy_stream(hs_stream_t **to_id,
+                                   const hs_stream_t *from_id);
 
 /**
  * Duplicate the given 'from' stream state onto the 'to' stream. The 'to' stream
@@ -314,11 +315,125 @@ hs_error_t hs_copy_stream(hs_stream_t **to_id, const hs_stream_t *from_id);
  * @return
  *      @ref HS_SUCCESS on success, other values on failure.
  */
-hs_error_t hs_reset_and_copy_stream(hs_stream_t *to_id,
-                                    const hs_stream_t *from_id,
-                                    hs_scratch_t *scratch,
-                                    match_event_handler onEvent,
-                                    void *context);
+hs_error_t HS_CDECL hs_reset_and_copy_stream(hs_stream_t *to_id,
+                                             const hs_stream_t *from_id,
+                                             hs_scratch_t *scratch,
+                                             match_event_handler onEvent,
+                                             void *context);
+
+/**
+ * Creates a compressed representation of the provided stream in the buffer
+ * provided. This compressed representation can be converted back into a stream
+ * state by using @ref hs_expand_stream() or @ref hs_reset_and_expand_stream().
+ * The size of the compressed representation will be placed into @a used_space.
+ *
+ * If there is not sufficient space in the buffer to hold the compressed
+ * represention, @ref HS_INSUFFICIENT_SPACE will be returned and @a used_space
+ * will be populated with the amount of space required.
+ *
+ * Note: this function does not close the provided stream, you may continue to
+ * use the stream or to free it with @ref hs_close_stream().
+ *
+ * @param stream
+ *      The stream (as created by @ref hs_open_stream()) to be compressed.
+ *
+ * @param buf
+ *      Buffer to write the compressed representation into. Note: if the call is
+ *      just being used to determine the amount of space required, it is allowed
+ *      to pass NULL here and @a buf_space as 0.
+ *
+ * @param buf_space
+ *      The number of bytes in @a buf. If buf_space is too small, the call will
+ *      fail with @ref HS_INSUFFICIENT_SPACE.
+ *
+ * @param used_space
+ *      Pointer to where the amount of used space will be written to. The used
+ *      buffer space is always less than or equal to @a buf_space. If the call
+ *      fails with @ref HS_INSUFFICIENT_SPACE, this pointer will be used to
+ *      write out the amount of buffer space required.
+ *
+ * @return
+ *      @ref HS_SUCCESS on success, @ref HS_INSUFFICIENT_SPACE if the provided
+ *      buffer is too small.
+ */
+hs_error_t HS_CDECL hs_compress_stream(const hs_stream_t *stream, char *buf,
+                                       size_t buf_space, size_t *used_space);
+
+/**
+ * Decompresses a compressed representation created by @ref hs_compress_stream()
+ * into a new stream.
+ *
+ * Note: @a buf must correspond to a complete compressed representation created
+ * by @ref hs_compress_stream() of a stream that was opened against @a db. It is
+ * not always possible to detect misuse of this API and behaviour is undefined
+ * if these properties are not satisfied.
+ *
+ * @param db
+ *      The compiled pattern database that the compressed stream was opened
+ *      against.
+ *
+ * @param stream
+ *      On success, a pointer to the expanded @ref hs_stream_t will be
+ *      returned; NULL on failure.
+ *
+ * @param buf
+ *      A compressed representation of a stream. These compressed forms are
+ *      created by @ref hs_compress_stream().
+ *
+ * @param buf_size
+ *      The size in bytes of the compressed representation.
+ *
+ * @return
+ *      @ref HS_SUCCESS on success, other values on failure.
+ */
+hs_error_t HS_CDECL hs_expand_stream(const hs_database_t *db,
+                                     hs_stream_t **stream, const char *buf,
+                                     size_t buf_size);
+
+/**
+ * Decompresses a compressed representation created by @ref hs_compress_stream()
+ * on top of the 'to' stream. The 'to' stream will first be reset (reporting
+ * any EOD matches if a non-NULL @a onEvent callback handler is provided).
+ *
+ * Note: the 'to' stream must be opened against the same database as the
+ * compressed stream.
+ *
+ * Note: @a buf must correspond to a complete compressed representation created
+ * by @ref hs_compress_stream() of a stream that was opened against @a db. It is
+ * not always possible to detect misuse of this API and behaviour is undefined
+ * if these properties are not satisfied.
+ *
+ * @param to_stream
+ *      A pointer to the generated @ref hs_stream_t will be
+ *      returned; NULL on failure.
+ *
+ * @param buf
+ *      A compressed representation of a stream. These compressed forms are
+ *      created by @ref hs_compress_stream().
+ *
+ * @param buf_size
+ *      The size in bytes of the compressed representation.
+ *
+ * @param scratch
+ *      A per-thread scratch space allocated by @ref hs_alloc_scratch(). This is
+ *      allowed to be NULL only if the @a onEvent callback is also NULL.
+ *
+ * @param onEvent
+ *      Pointer to a match event callback function. If a NULL pointer is given,
+ *      no matches will be returned.
+ *
+ * @param context
+ *      The user defined pointer which will be passed to the callback function
+ *      when a match occurs.
+ *
+ * @return
+ *      @ref HS_SUCCESS on success, other values on failure.
+ */
+hs_error_t HS_CDECL hs_reset_and_expand_stream(hs_stream_t *to_stream,
+                                               const char *buf, size_t buf_size,
+                                               hs_scratch_t *scratch,
+                                               match_event_handler onEvent,
+                                               void *context);
 
 /**
  * The block (non-streaming) regular expression scanner.
@@ -355,10 +470,10 @@ hs_error_t hs_reset_and_copy_stream(hs_stream_t *to_id,
  *      match callback indicated that scanning should stop; other values on
  *      error.
  */
-hs_error_t hs_scan(const hs_database_t *db, const char *data,
-                   unsigned int length, unsigned int flags,
-                   hs_scratch_t *scratch, match_event_handler onEvent,
-                   void *context);
+hs_error_t HS_CDECL hs_scan(const hs_database_t *db, const char *data,
+                            unsigned int length, unsigned int flags,
+                            hs_scratch_t *scratch, match_event_handler onEvent,
+                            void *context);
 
 /**
  * The vectored regular expression scanner.
@@ -398,10 +513,12 @@ hs_error_t hs_scan(const hs_database_t *db, const char *data,
  *      Returns @ref HS_SUCCESS on success; @ref HS_SCAN_TERMINATED if the match
  *      callback indicated that scanning should stop; other values on error.
  */
-hs_error_t hs_scan_vector(const hs_database_t *db, const char *const *data,
-                          const unsigned int *length, unsigned int count,
-                          unsigned int flags, hs_scratch_t *scratch,
-                          match_event_handler onEvent, void *context);
+hs_error_t HS_CDECL hs_scan_vector(const hs_database_t *db,
+                                   const char *const *data,
+                                   const unsigned int *length,
+                                   unsigned int count, unsigned int flags,
+                                   hs_scratch_t *scratch,
+                                   match_event_handler onEvent, void *context);
 
 /**
  * Allocate a "scratch" space for use by Hyperscan.
@@ -429,7 +546,8 @@ hs_error_t hs_scan_vector(const hs_database_t *db, const char *const *data,
  *      allocation fails.  Other errors may be returned if invalid parameters
  *      are specified.
  */
-hs_error_t hs_alloc_scratch(const hs_database_t *db, hs_scratch_t **scratch);
+hs_error_t HS_CDECL hs_alloc_scratch(const hs_database_t *db,
+                                     hs_scratch_t **scratch);
 
 /**
  * Allocate a scratch space that is a clone of an existing scratch space.
@@ -449,7 +567,8 @@ hs_error_t hs_alloc_scratch(const hs_database_t *db, hs_scratch_t **scratch);
  *      @ref HS_SUCCESS on success; @ref HS_NOMEM if the allocation fails.
  *      Other errors may be returned if invalid parameters are specified.
  */
-hs_error_t hs_clone_scratch(const hs_scratch_t *src, hs_scratch_t **dest);
+hs_error_t HS_CDECL hs_clone_scratch(const hs_scratch_t *src,
+                                     hs_scratch_t **dest);
 
 /**
  * Provides the size of the given scratch space.
@@ -465,7 +584,8 @@ hs_error_t hs_clone_scratch(const hs_scratch_t *src, hs_scratch_t **dest);
  * @return
  *      @ref HS_SUCCESS on success, other values on failure.
  */
-hs_error_t hs_scratch_size(const hs_scratch_t *scratch, size_t *scratch_size);
+hs_error_t HS_CDECL hs_scratch_size(const hs_scratch_t *scratch,
+                                    size_t *scratch_size);
 
 /**
  * Free a scratch block previously allocated by @ref hs_alloc_scratch() or @ref
@@ -480,7 +600,7 @@ hs_error_t hs_scratch_size(const hs_scratch_t *scratch, size_t *scratch_size);
  * @return
  *      @ref HS_SUCCESS on success, other values on failure.
  */
-hs_error_t hs_free_scratch(hs_scratch_t *scratch);
+hs_error_t HS_CDECL hs_free_scratch(hs_scratch_t *scratch);
 
 /**
  * Callback 'from' return value, indicating that the start of this match was

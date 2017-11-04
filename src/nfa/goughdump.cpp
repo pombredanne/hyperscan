@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -37,6 +37,7 @@
 #include "ue2common.h"
 #include "util/charreach.h"
 #include "util/dump_charclass.h"
+#include "util/dump_util.h"
 #include "util/unaligned.h"
 
 #include <cctype>
@@ -259,6 +260,7 @@ void dumpTransitions(const NFA *nfa, FILE *f,
     fprintf(f, "\n");
 }
 
+static
 void nfaExecGough8_dumpDot(const struct NFA *nfa, FILE *f) {
     assert(nfa->type == GOUGH_NFA_8);
     const mcclellan *m = (const mcclellan *)getImplNfa(nfa);
@@ -278,6 +280,7 @@ void nfaExecGough8_dumpDot(const struct NFA *nfa, FILE *f) {
     fprintf(f, "}\n");
 }
 
+static
 void nfaExecGough8_dumpText(const struct NFA *nfa, FILE *f) {
 
     assert(nfa->type == GOUGH_NFA_8);
@@ -302,6 +305,7 @@ void nfaExecGough8_dumpText(const struct NFA *nfa, FILE *f) {
     dumpTextReverse(nfa, f);
 }
 
+static
 void nfaExecGough16_dumpDot(const struct NFA *nfa, FILE *f) {
     assert(nfa->type == GOUGH_NFA_16);
     const mcclellan *m = (const mcclellan *)getImplNfa(nfa);
@@ -321,6 +325,7 @@ void nfaExecGough16_dumpDot(const struct NFA *nfa, FILE *f) {
     fprintf(f, "}\n");
 }
 
+static
 void nfaExecGough16_dumpText(const struct NFA *nfa, FILE *f) {
     assert(nfa->type == GOUGH_NFA_16);
     const mcclellan *m = (const mcclellan *)getImplNfa(nfa);
@@ -344,6 +349,18 @@ void nfaExecGough16_dumpText(const struct NFA *nfa, FILE *f) {
 
     fprintf(f, "\n");
     dumpTextReverse(nfa, f);
+}
+
+void nfaExecGough16_dump(const NFA *nfa, const string &base) {
+    assert(nfa->type == GOUGH_NFA_16);
+    nfaExecGough16_dumpText(nfa, StdioFile(base + ".txt", "w"));
+    nfaExecGough16_dumpDot(nfa, StdioFile(base + ".dot", "w"));
+}
+
+void nfaExecGough8_dump(const NFA *nfa, const string &base) {
+    assert(nfa->type == GOUGH_NFA_8);
+    nfaExecGough8_dumpText(nfa, StdioFile(base + ".txt", "w"));
+    nfaExecGough8_dumpDot(nfa, StdioFile(base + ".dot", "w"));
 }
 
 } // namespace ue2

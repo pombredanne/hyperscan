@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -45,18 +45,17 @@
 
 #include "ue2common.h"
 #include "rose/rose_common.h"
-#include "util/ue2_containers.h"
+#include "util/flat_containers.h"
+#include "util/ue2_graph.h"
 #include "util/ue2string.h"
 
 #include <memory>
-
-#include <boost/graph/graph_traits.hpp>
-#include <boost/graph/adjacency_list.hpp>
 
 namespace ue2 {
 
 class NGHolder;
 struct raw_som_dfa;
+struct raw_dfa;
 
 enum RoseInVertexType {
     RIV_LITERAL,
@@ -106,6 +105,12 @@ public:
                                  ROSE_BOUND_INF);
     }
 
+    /* for when there is a suffix graph which handles the reports */
+    static RoseInVertexProps makeAcceptEod() {
+        return RoseInVertexProps(RIV_ACCEPT_EOD, ue2_literal(), 0,
+                                 ROSE_BOUND_INF);
+    }
+
     static RoseInVertexProps makeStart(bool anchored) {
         DEBUG_PRINTF("making %s\n", anchored ? "anchored start" : "start");
         if (anchored) {
@@ -122,6 +127,7 @@ public:
     flat_set<ReportID> reports; /**< for RIV_ACCEPT/RIV_ACCEPT_EOD */
     u32 min_offset; /**< Minimum offset at which this vertex can match. */
     u32 max_offset; /**< Maximum offset at which this vertex can match. */
+    size_t index = 0;
 };
 
 struct RoseInEdgeProps {
@@ -161,24 +167,22 @@ struct RoseInEdgeProps {
     /** \brief Maximum bound on 'dot' repeat between literals. */
     u32 maxBound;
 
-    /** \brief Prefix graph. Graph is end to (end - lag). */
+    /** \brief Graph on edge. Graph is end to (end - lag). */
     std::shared_ptr<NGHolder> graph;
+
+    /** \brief DFA version of graph, if we have already determinised. */
+    std::shared_ptr<raw_dfa> dfa;
 
     /** \brief Haig version of graph, if required. */
     std::shared_ptr<raw_som_dfa> haig;
 
     u32 graph_lag;
-
-    /** \brief Escape characters, can be used instead of graph.
-     *
-     * currently must not intersect with succ literal and must be a literal -
-     * literal edge, TODO: handle */
-    CharReach escapes;
+    size_t index = 0;
 };
 
-typedef boost::adjacency_list<boost::listS, boost::listS, boost::bidirectionalS,
-                              RoseInVertexProps,
-                              RoseInEdgeProps> RoseInGraph;
+struct RoseInGraph
+    : public ue2_graph<RoseInGraph, RoseInVertexProps, RoseInEdgeProps> {
+};
 typedef RoseInGraph::vertex_descriptor RoseInVertex;
 typedef RoseInGraph::edge_descriptor RoseInEdge;
 

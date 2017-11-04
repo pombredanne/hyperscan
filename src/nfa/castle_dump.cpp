@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -40,17 +40,18 @@
 #include "shufticompile.h"
 #include "trufflecompile.h"
 #include "util/charreach.h"
+#include "util/dump_util.h"
 #include "util/dump_charclass.h"
 
 #ifndef DUMP_SUPPORT
 #error No dump support!
 #endif
 
-namespace ue2 {
+/* Note: No dot files for castle */
 
-void nfaExecCastle0_dumpDot(const struct NFA *, FILE *) {
-    // No GraphViz output for Castles.
-}
+using namespace std;
+
+namespace ue2 {
 
 static
 void dumpTextSubCastle(const SubCastle &sub, FILE *f) {
@@ -67,8 +68,10 @@ void dumpTextSubCastle(const SubCastle &sub, FILE *f) {
     fprintf(f, "\n");
 }
 
-void nfaExecCastle0_dumpText(const struct NFA *nfa, FILE *f) {
+void nfaExecCastle_dump(const struct NFA *nfa, const string &base) {
     const Castle *c = (const Castle *)getImplNfa(nfa);
+
+    StdioFile f(base + ".txt", "w");
 
     fprintf(f, "Castle multi-tenant repeat engine\n");
     fprintf(f, "\n");
@@ -85,13 +88,15 @@ void nfaExecCastle0_dumpText(const struct NFA *nfa, FILE *f) {
         fprintf(f, "negated verm, scanning for 0x%02x\n", c->u.verm.c);
         break;
     case CASTLE_SHUFTI: {
-        const CharReach cr = shufti2cr(c->u.shuf.mask_lo, c->u.shuf.mask_hi);
+        const CharReach cr = shufti2cr((const u8 *)&c->u.shuf.mask_lo,
+                                       (const u8 *)&c->u.shuf.mask_hi);
         fprintf(f, "shufti, scanning for %s (%zu chars)\n",
                 describeClass(cr).c_str(), cr.count());
         break;
     }
     case CASTLE_TRUFFLE: {
-        const CharReach cr = truffle2cr(c->u.truffle.mask1, c->u.truffle.mask2);
+        const CharReach cr = truffle2cr((const u8 *)&c->u.truffle.mask1,
+                                        (const u8 *)&c->u.truffle.mask2);
         fprintf(f, "truffle, scanning for %s (%zu chars)\n",
                 describeClass(cr).c_str(), cr.count());
         break;
@@ -100,6 +105,7 @@ void nfaExecCastle0_dumpText(const struct NFA *nfa, FILE *f) {
         fprintf(f, "unknown type %u\n", c->type);
         break;
     }
+    fprintf(f, "Stale Iter Offset:          %u\n", c->staleIterOffset);
 
     fprintf(f, "\n");
     dumpTextReverse(nfa, f);

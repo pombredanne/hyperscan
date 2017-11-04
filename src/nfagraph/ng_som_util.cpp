@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -54,7 +54,7 @@ vector<DepthMinMax> getDistancesFromSOM(const NGHolder &g_orig) {
     // We operate on a temporary copy of the original graph here, so we don't
     // have to mutate the original.
     NGHolder g;
-    ue2::unordered_map<NFAVertex, NFAVertex> vmap; // vertex in g_orig to vertex in g
+    unordered_map<NFAVertex, NFAVertex> vmap; // vertex in g_orig to vertex in g
     cloneHolder(g, g_orig, &vmap);
 
     vector<NFAVertex> vstarts;
@@ -76,10 +76,10 @@ vector<DepthMinMax> getDistancesFromSOM(const NGHolder &g_orig) {
         clear_in_edges(v, g);
     }
 
-    //dumpGraph("som_depth.dot", g.g);
+    //dumpGraph("som_depth.dot", g);
 
-    vector<DepthMinMax> temp_depths; // numbered by vertex index in g
-    calcDepthsFrom(g, g.start, temp_depths);
+    // Find depths, indexed by vertex index in g
+    auto temp_depths = calcDepthsFrom(g, g.start);
 
     // Transfer depths, indexed by vertex index in g_orig.
     vector<DepthMinMax> depths(num_vertices(g_orig));
@@ -94,7 +94,7 @@ vector<DepthMinMax> getDistancesFromSOM(const NGHolder &g_orig) {
 
         if (v_orig == g_orig.startDs || is_virtual_start(v_orig, g_orig)) {
             // StartDs and virtual starts always have zero depth.
-            d = DepthMinMax(0, 0);
+            d = DepthMinMax(depth(0), depth(0));
         } else {
             u32 new_idx = g[v_new].index;
             d = temp_depths.at(new_idx);
@@ -136,14 +136,14 @@ bool firstMatchIsFirst(const NGHolder &p) {
         return false;
     }
 
-    ue2::flat_set<NFAVertex> states;
+    flat_set<NFAVertex> states;
     /* turn on all states (except starts - avoid suffix matches) */
     /* If we were doing (1) we would also except states leading to accepts -
        avoid prefix matches */
     for (auto v : vertices_range(p)) {
         assert(!is_virtual_start(v, p));
         if (!is_special(v, p)) {
-            DEBUG_PRINTF("turning on %u\n", p[v].index);
+            DEBUG_PRINTF("turning on %zu\n", p[v].index);
             states.insert(v);
         }
     }
@@ -154,9 +154,9 @@ bool firstMatchIsFirst(const NGHolder &p) {
     for (auto v : states) {
         /* need to check if this vertex may represent an infix match - ie
          * it does not have an edge to accept. */
-        DEBUG_PRINTF("check %u\n", p[v].index);
+        DEBUG_PRINTF("check %zu\n", p[v].index);
         if (!edge(v, p.accept, p).second) {
-            DEBUG_PRINTF("fail %u\n", p[v].index);
+            DEBUG_PRINTF("fail %zu\n", p[v].index);
             return false;
         }
     }
@@ -166,7 +166,7 @@ bool firstMatchIsFirst(const NGHolder &p) {
 }
 
 bool somMayGoBackwards(NFAVertex u, const NGHolder &g,
-                       const ue2::unordered_map<NFAVertex, u32> &region_map,
+                       const unordered_map<NFAVertex, u32> &region_map,
                        smgb_cache &cache) {
     /* Need to ensure all matches of the graph g up to u contain no infixes
      * which are also matches of the graph to u.
@@ -186,15 +186,11 @@ bool somMayGoBackwards(NFAVertex u, const NGHolder &g,
         return cache.smgb[u];
     }
 
-    DEBUG_PRINTF("checking if som can go backwards on %u\n",
-                  g[u].index);
+    DEBUG_PRINTF("checking if som can go backwards on %zu\n", g[u].index);
 
     set<NFAEdge> be;
     BackEdges<set<NFAEdge>> backEdgeVisitor(be);
-    depth_first_search(
-        g.g, visitor(backEdgeVisitor)
-                 .root_vertex(g.start)
-                 .vertex_index_map(get(&NFAGraphVertexProps::index, g.g)));
+    boost::depth_first_search(g, visitor(backEdgeVisitor).root_vertex(g.start));
 
     bool rv;
     if (0) {
@@ -211,8 +207,7 @@ bool somMayGoBackwards(NFAVertex u, const NGHolder &g,
         NFAVertex s = source(e, g);
         NFAVertex t = target(e, g);
         /* only need to worry about big cycles including/before u */
-        DEBUG_PRINTF("back edge %u %u\n", g[s].index,
-                      g[t].index);
+        DEBUG_PRINTF("back edge %zu %zu\n", g[s].index, g[t].index);
         if (s != t && region_map.at(s) <= u_region) {
             DEBUG_PRINTF("eek big cycle\n");
             rv = true; /* big cycle -> eek */
@@ -220,10 +215,11 @@ bool somMayGoBackwards(NFAVertex u, const NGHolder &g,
         }
     }
 
-    ue2::unordered_map<NFAVertex, NFAVertex> orig_to_copy;
+    unordered_map<NFAVertex, NFAVertex> orig_to_copy;
     NGHolder c_g;
     cloneHolder(c_g, g, &orig_to_copy);
 
+    /* treat virtual starts as unconditional - wire to startDs instead */
     for (NFAVertex v : vertices_range(g)) {
         if (!is_virtual_start(v, g)) {
             continue;
@@ -236,6 +232,7 @@ bool somMayGoBackwards(NFAVertex u, const NGHolder &g,
         clear_vertex(c_v, c_g);
     }
 
+    /* treat u as the only accept state */
     NFAVertex c_u = orig_to_copy[u];
     clear_in_edges(c_g.acceptEod, c_g);
     add_edge(c_g.accept, c_g.acceptEod, c_g);
@@ -256,7 +253,9 @@ bool somMayGoBackwards(NFAVertex u, const NGHolder &g,
         }
         for (auto v : adjacent_vertices_range(t, g)) {
             if (contains(u_succ, v)) {
-                add_edge(orig_to_copy[t], c_g.accept, c_g);
+                /* due to virtual starts being aliased with normal starts in the
+                 * copy of the graph, we may have already added the edges. */
+                add_edge_if_not_present(orig_to_copy[t], c_g.accept, c_g);
                 break;
             }
         }
@@ -265,13 +264,13 @@ bool somMayGoBackwards(NFAVertex u, const NGHolder &g,
     pruneUseless(c_g);
 
     be.clear();
-    depth_first_search(c_g.g, visitor(backEdgeVisitor).root_vertex(c_g.start).
-                       vertex_index_map(get(&NFAGraphVertexProps::index, c_g.g)));
+    boost::depth_first_search(c_g, visitor(backEdgeVisitor)
+                                   .root_vertex(c_g.start));
 
     for (const auto &e : be) {
         NFAVertex s = source(e, c_g);
         NFAVertex t = target(e, c_g);
-        DEBUG_PRINTF("back edge %u %u\n", c_g[s].index, c_g[t].index);
+        DEBUG_PRINTF("back edge %zu %zu\n", c_g[s].index, c_g[t].index);
         if (s != t) {
             assert(0);
             DEBUG_PRINTF("eek big cycle\n");
@@ -288,7 +287,7 @@ bool somMayGoBackwards(NFAVertex u, const NGHolder &g,
 }
 
 bool sentClearsTail(const NGHolder &g,
-                    const ue2::unordered_map<NFAVertex, u32> &region_map,
+                    const unordered_map<NFAVertex, u32> &region_map,
                     const NGHolder &sent, u32 last_head_region,
                     u32 *bad_region) {
     /* if a subsequent match from the prefix clears the rest of the pattern
@@ -313,7 +312,7 @@ bool sentClearsTail(const NGHolder &g,
      */
 
     u32 first_bad_region = ~0U;
-    ue2::flat_set<NFAVertex> states;
+    flat_set<NFAVertex> states;
     /* turn on all states */
     DEBUG_PRINTF("region %u is cutover\n", last_head_region);
     for (auto v : vertices_range(g)) {
@@ -323,7 +322,7 @@ bool sentClearsTail(const NGHolder &g,
     }
 
     for (UNUSED auto v : states) {
-        DEBUG_PRINTF("start state: %u\n", g[v].index);
+        DEBUG_PRINTF("start state: %zu\n", g[v].index);
     }
 
     /* run the prefix the main graph */
@@ -335,7 +334,7 @@ bool sentClearsTail(const NGHolder &g,
             continue; /* not in tail */
         }
 
-        DEBUG_PRINTF("v %u is still on\n", g[v].index);
+        DEBUG_PRINTF("v %zu is still on\n", g[v].index);
         assert(v != g.accept && v != g.acceptEod); /* no cr */
 
         assert(contains(region_map, v));

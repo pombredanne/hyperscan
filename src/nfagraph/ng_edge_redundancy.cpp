@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -38,8 +38,8 @@
 #include "parser/position.h"
 #include "util/compile_context.h"
 #include "util/container.h"
+#include "util/flat_containers.h"
 #include "util/graph_range.h"
-#include "util/ue2_containers.h"
 
 #include <set>
 #include <vector>
@@ -181,6 +181,28 @@ bool removeEdgeRedundancyNearCyclesFwd(NGHolder &g, bool ignore_starts) {
     return dead_count;
 }
 
+static
+bool checkReportsRev(const NGHolder &g, NFAVertex v,
+                     const set<NFAVertex> &happy) {
+    if (g[v].reports.empty()) {
+        return true;
+    }
+
+    assert(edge(v, g.accept, g).second || edge(v, g.acceptEod, g).second);
+
+    /* an edge to accept takes priority over eod only accept */
+    NFAVertex accept = edge(v, g.accept, g).second ? g.accept : g.acceptEod;
+
+    flat_set<ReportID> happy_reports;
+    for (NFAVertex u : happy) {
+        if (edge(u, accept, g).second) {
+            insert(&happy_reports, g[u].reports);
+        }
+    }
+
+    return is_subset_of(g[v].reports, happy_reports);
+}
+
 /** \brief Redundant self-loop removal (reverse version).
  *
  * A self loop on a vertex v can be removed if:
@@ -233,7 +255,8 @@ bool removeEdgeRedundancyNearCyclesRev(NGHolder &g) {
             happy.insert(u);
         }
 
-        if (!happy.empty() && checkVerticesRev(g, sad, happy)) {
+        if (!happy.empty() && checkVerticesRev(g, sad, happy)
+            && checkReportsRev(g, v, happy)) {
             dead_count++;
             remove_edge(v, v, g);
         }
@@ -297,9 +320,8 @@ bool checkFwdCandidate(const NGHolder &g, NFAVertex fixed_src,
         return false;
     }
 
-    DEBUG_PRINTF("edge (%u, %u) killed by edge (%u, %u)\n",
-                 g[w].index, g[v].index,
-                 g[fixed_src].index, g[v].index);
+    DEBUG_PRINTF("edge (%zu, %zu) killed by edge (%zu, %zu)\n",
+                 g[w].index, g[v].index, g[fixed_src].index, g[v].index);
     return true;
 }
 
@@ -415,7 +437,7 @@ bool removeEdgeRedundancyFwd(NGHolder &g, bool ignore_starts) {
         pred(g, u, &parents_u);
 
         done.clear();
-        if (hasGreaterOutDegree(1, u, g)) {
+        if (out_degree(u, g) > 1) {
             checkLargeOutU(g, u, parents_u, possible_w, done, &dead);
         } else {
             checkSmallOutU(g, u, parents_u, done, &dead);
@@ -460,7 +482,7 @@ bool removeSiblingsOfStartDotStar(NGHolder &g) {
     vector<NFAEdge> dead;
 
     for (auto v : adjacent_vertices_range(g.startDs, g)) {
-        DEBUG_PRINTF("checking %u\n", g[v].index);
+        DEBUG_PRINTF("checking %zu\n", g[v].index);
         if (is_special(v, g)) {
             continue;
         }
@@ -470,8 +492,7 @@ bool removeSiblingsOfStartDotStar(NGHolder &g) {
             if (is_special(u, g)) {
                 continue;
             }
-            DEBUG_PRINTF("removing %u->%u\n", g[u].index,
-                         g[v].index);
+            DEBUG_PRINTF("removing %zu->%zu\n", g[u].index, g[v].index);
             dead.push_back(e);
         }
     }

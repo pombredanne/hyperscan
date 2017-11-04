@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -36,8 +36,9 @@
 #include "hwlm.h"
 #include "hwlm_literal.h"
 #include "ue2common.h"
-#include "util/alloc.h"
+#include "util/bytecode_ptr.h"
 
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -45,37 +46,62 @@ struct HWLM;
 
 namespace ue2 {
 
+class FDREngineDescription;
+class TeddyEngineDescription;
 struct CompileContext;
 struct Grey;
-struct target_t;
 
-/** \brief Structure gathering together the input/output parameters related to
- * streaming mode operation. */
-struct hwlmStreamingControl {
-    /** \brief IN parameter: Upper limit on the amount of history that can be
-     * requested. */
-    size_t history_max;
+/** \brief Class representing a literal matcher prototype. */
+struct HWLMProto {
+    /**
+     * \brief Engine type to distinguish noodle from FDR and Teddy.
+     */
+    u8 engType;
 
-    /** \brief IN parameter: History already known to be used before literal
-     * analysis. */
-    size_t history_min;
+    /**
+     * \brief FDR engine description.
+     */
+    std::unique_ptr<FDREngineDescription> fdrEng;
 
-    /** \brief OUT parameter: History required by the literal matcher to
-     * correctly match all literals. */
-    size_t literal_history_required;
+    /**
+     * \brief Teddy engine description.
+     */
+    std::unique_ptr<TeddyEngineDescription> teddyEng;
 
-    /** OUT parameter: Stream state required by literal matcher in bytes. Can
-     * be zero, and generally will be small (0-8 bytes). */
-    size_t literal_stream_state_required;
+     /**
+      * \brief HWLM literals passed from Rose.
+      */
+    std::vector<hwlmLiteral> lits;
+
+    /**
+     * \brief Bucket assignment info in FDR and Teddy
+     */
+    std::map<u32, std::vector<u32>> bucketToLits;
+
+    /**
+     * \brief Flag to optimise matcher for small size from Rose.
+     */
+    bool make_small = false;
+
+    HWLMProto(u8 engType_in, std::vector<hwlmLiteral> lits_in);
+
+    HWLMProto(u8 engType_in, std::unique_ptr<FDREngineDescription> eng_in,
+              std::vector<hwlmLiteral> lits_in,
+              std::map<u32, std::vector<u32>> bucketToLits_in,
+              bool make_small_in);
+
+    HWLMProto(u8 engType_in, std::unique_ptr<TeddyEngineDescription> eng_in,
+              std::vector<hwlmLiteral> lits_in,
+              std::map<u32, std::vector<u32>> bucketToLits_in,
+              bool make_small_in);
+
+    ~HWLMProto();
 };
 
 /** \brief Build an \ref HWLM literal matcher runtime structure for a group of
  * literals.
  *
- * \param lits The group of literals.
- * \param stream_control Streaming control parameters. If the matcher will
- *        operate in non-streaming (block) mode, this pointer should be NULL.
- * \param make_small Optimise matcher for small size.
+ * \param proto Literal matcher prototype.
  * \param cc Compile context.
  * \param expected_groups FIXME: document me!
  *
@@ -83,11 +109,12 @@ struct hwlmStreamingControl {
  * may result in a nullptr return value, or a std::bad_alloc exception being
  * thrown.
  */
-aligned_unique_ptr<HWLM>
-hwlmBuild(const std::vector<hwlmLiteral> &lits,
-          hwlmStreamingControl *stream_control, bool make_small,
-          const CompileContext &cc,
-          hwlm_group_t expected_groups = HWLM_ALL_GROUPS);
+bytecode_ptr<HWLM> hwlmBuild(const HWLMProto &proto, const CompileContext &cc,
+                             hwlm_group_t expected_groups = HWLM_ALL_GROUPS);
+
+std::unique_ptr<HWLMProto>
+hwlmBuildProto(std::vector<hwlmLiteral> &lits, bool make_small,
+               const CompileContext &cc);
 
 /**
  * Returns an estimate of the number of repeated characters on the end of a

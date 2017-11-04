@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -26,14 +26,17 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "rose_build_misc.h"
 #include "rose_build_impl.h"
 
-#include "hwlm/hwlm_build.h"
+#include "rose_build_resources.h"
+#include "hwlm/hwlm_literal.h"
 #include "nfa/castlecompile.h"
 #include "nfa/goughcompile.h"
 #include "nfa/mcclellancompile_util.h"
 #include "nfa/nfa_api.h"
 #include "nfa/rdfa.h"
+#include "nfa/tamaramacompile.h"
 #include "nfagraph/ng_holder.h"
 #include "nfagraph/ng_limex.h"
 #include "nfagraph/ng_reports.h"
@@ -55,46 +58,37 @@
 #include "ue2common.h"
 #include "grey.h"
 
-#include <boost/functional/hash/hash_fwd.hpp>
 #include <boost/graph/breadth_first_search.hpp>
 
 using namespace std;
-using boost::hash_combine;
 
 namespace ue2 {
 
 // just to get it out of the header
 RoseBuild::~RoseBuild() { }
 
-RoseBuildImpl::RoseBuildImpl(ReportManager &rm_in, SomSlotManager &ssm_in,
+RoseBuildImpl::RoseBuildImpl(ReportManager &rm_in,
+                             SomSlotManager &ssm_in,
+                             SmallWriteBuild &smwr_in,
                              const CompileContext &cc_in,
                              const BoundaryReports &boundary_in)
     : cc(cc_in),
       root(add_vertex(g)),
       anchored_root(add_vertex(g)),
-      vertexIndex(0),
-      delay_base_id(MO_INVALID_IDX),
       hasSom(false),
-      group_weak_end(0),
       group_end(0),
-      anchored_base_id(MO_INVALID_IDX),
-      nonbenefits_base_id(MO_INVALID_IDX),
       ematcher_region_size(0),
-      floating_direct_report(false),
       eod_event_literal_id(MO_INVALID_IDX),
       max_rose_anchored_floating_overlap(0),
       rm(rm_in),
       ssm(ssm_in),
+      smwr(smwr_in),
       boundary(boundary_in),
       next_nfa_report(0) {
     // add root vertices to graph
-    g[root].idx = vertexIndex++;
-    g[root].role = MO_INVALID_IDX;
     g[root].min_offset = 0;
     g[root].max_offset = 0;
 
-    g[anchored_root].idx = vertexIndex++;
-    g[anchored_root].role = MO_INVALID_IDX;
     g[anchored_root].min_offset = 0;
     g[anchored_root].max_offset = 0;
 }
@@ -160,14 +154,12 @@ bool isInTable(const RoseBuildImpl &tbi, RoseVertex v,
 
     // All literals for a given vertex will be in the same table, so we need
     // only inspect the first one.
-    const auto lit_table = tbi.literals.right.at(*lit_ids.begin()).table;
+    const auto lit_table = tbi.literals.at(*lit_ids.begin()).table;
 
-#ifndef NDEBUG
     // Verify that all literals for this vertex are in the same table.
-    for (auto lit_id : lit_ids) {
-        assert(tbi.literals.right.at(lit_id).table == lit_table);
-    }
-#endif
+    assert(all_of_in(lit_ids, [&](u32 lit_id) {
+        return tbi.literals.at(lit_id).table == lit_table;
+    }));
 
     return lit_table == table;
 }
@@ -194,7 +186,7 @@ bool RoseBuildImpl::hasLiteralInTable(RoseVertex v,
 bool RoseBuildImpl::hasNoFloatingRoots() const {
     for (auto v : adjacent_vertices_range(root, g)) {
         if (isFloating(v)) {
-            DEBUG_PRINTF("direct floating root %u\n", g[v].role);
+            DEBUG_PRINTF("direct floating root %zu\n", g[v].index);
             return false;
         }
     }
@@ -202,28 +194,12 @@ bool RoseBuildImpl::hasNoFloatingRoots() const {
     /* need to check if the anchored_root has any literals which are too deep */
     for (auto v : adjacent_vertices_range(anchored_root, g)) {
         if (isFloating(v)) {
-            DEBUG_PRINTF("indirect floating root %u\n", g[v].role);
+            DEBUG_PRINTF("indirect floating root %zu\n", g[v].index);
             return false;
         }
     }
 
     return true;
-}
-
-bool RoseBuildImpl::hasEodSideLink(void) const {
-    for (auto v : vertices_range(g)) {
-        if (!g[v].eod_accept) {
-            continue;
-        }
-
-        for (auto u : inv_adjacent_vertices_range(v, g)) {
-            if (g[u].escapes.any()) {
-                return true;
-            }
-        }
-    }
-
-    return false;
 }
 
 size_t RoseBuildImpl::maxLiteralLen(RoseVertex v) const {
@@ -233,7 +209,7 @@ size_t RoseBuildImpl::maxLiteralLen(RoseVertex v) const {
     size_t maxlen = 0;
 
     for (const auto &lit_id : lit_ids) {
-        maxlen = max(maxlen, literals.right.at(lit_id).elength());
+        maxlen = max(maxlen, literals.at(lit_id).elength());
     }
 
     return maxlen;
@@ -246,22 +222,19 @@ size_t RoseBuildImpl::minLiteralLen(RoseVertex v) const {
     size_t minlen = ROSE_BOUND_INF;
 
     for (const auto &lit_id : lit_ids) {
-        minlen = min(minlen, literals.right.at(lit_id).elength());
+        minlen = min(minlen, literals.at(lit_id).elength());
     }
 
     return minlen;
 }
 
 // RoseBuild factory
-unique_ptr<RoseBuild> makeRoseBuilder(ReportManager &rm, SomSlotManager &ssm,
+unique_ptr<RoseBuild> makeRoseBuilder(ReportManager &rm,
+                                      SomSlotManager &ssm,
+                                      SmallWriteBuild &smwr,
                                       const CompileContext &cc,
                                       const BoundaryReports &boundary) {
-    return ue2::make_unique<RoseBuildImpl>(rm, ssm, cc, boundary);
-}
-
-size_t roseSize(const RoseEngine *t) {
-    assert(t);
-    return t->size;
+    return ue2::make_unique<RoseBuildImpl>(rm, ssm, smwr, cc, boundary);
 }
 
 bool roseIsPureLiteral(const RoseEngine *t) {
@@ -312,12 +285,28 @@ size_t maxOverlap(const rose_literal_id &a, const rose_literal_id &b) {
 static
 const rose_literal_id &getOverlapLiteral(const RoseBuildImpl &tbi,
                                          u32 literal_id) {
-    map<u32, rose_literal_id>::const_iterator it =
-        tbi.anchoredLitSuffix.find(literal_id);
+    auto it = tbi.anchoredLitSuffix.find(literal_id);
     if (it != tbi.anchoredLitSuffix.end()) {
         return it->second;
     }
-    return tbi.literals.right.at(literal_id);
+    return tbi.literals.at(literal_id);
+}
+
+ue2_literal findNonOverlappingTail(const set<ue2_literal> &lits,
+                                   const ue2_literal &s) {
+    size_t max_overlap = 0;
+
+    for (const auto &lit : lits) {
+        size_t overlap = lit != s ? maxStringOverlap(lit, s)
+                                  : maxStringSelfOverlap(s);
+        max_overlap = max(max_overlap, overlap);
+    }
+
+    /* find the tail that doesn't overlap */
+    ue2_literal tail = s.substr(max_overlap);
+    DEBUG_PRINTF("%zu overlap, tail: '%s'\n", max_overlap,
+                 dumpString(tail).c_str());
+    return tail;
 }
 
 size_t RoseBuildImpl::maxLiteralOverlap(RoseVertex u, RoseVertex v) const {
@@ -335,14 +324,14 @@ size_t RoseBuildImpl::maxLiteralOverlap(RoseVertex u, RoseVertex v) const {
 void RoseBuildImpl::removeVertices(const vector<RoseVertex> &dead) {
     for (auto v : dead) {
         assert(!isAnyStart(v));
-        DEBUG_PRINTF("removing vertex %zu\n", g[v].idx);
+        DEBUG_PRINTF("removing vertex %zu\n", g[v].index);
         for (auto lit_id : g[v].literals) {
             literal_info[lit_id].vertices.erase(v);
         }
-        clear_vertex_faster(v, g);
+        clear_vertex(v, g);
         remove_vertex(v, g);
     }
-    renumberVertices();
+    renumber_vertices(g);
 }
 
 // Find the maximum bound on the edges to this vertex's successors ignoring
@@ -376,16 +365,14 @@ u32 RoseBuildImpl::calcSuccMaxBound(RoseVertex u) const {
 
 u32 RoseBuildImpl::getLiteralId(const ue2_literal &s, u32 delay,
                                 rose_literal_table table) {
-    DEBUG_PRINTF("getting id for %s\n", dumpString(s).c_str());
+    DEBUG_PRINTF("getting id for %s in table %d\n", dumpString(s).c_str(),
+                 table);
     assert(table != ROSE_ANCHORED);
     rose_literal_id key(s, table, delay);
-    u32 numLiterals = verify_u32(literals.left.size());
 
-    RoseLiteralMap::iterator it;
-    bool inserted;
-    tie(it, inserted)
-        = literals.insert(RoseLiteralMap::value_type(key, numLiterals));
-    u32 id = it->right;
+    auto m = literals.insert(key);
+    u32 id = m.first;
+    bool inserted = m.second;
 
     if (inserted) {
         literal_info.push_back(rose_literal_info());
@@ -465,19 +452,17 @@ rose_literal_id::rose_literal_id(const ue2_literal &s_in,
 u32 RoseBuildImpl::getLiteralId(const ue2_literal &s, const vector<u8> &msk,
                                 const vector<u8> &cmp, u32 delay,
                                 rose_literal_table table) {
-    DEBUG_PRINTF("getting id for %s\n", dumpString(s).c_str());
+    DEBUG_PRINTF("getting id for %s in table %d\n", dumpString(s).c_str(),
+                 table);
     assert(table != ROSE_ANCHORED);
     rose_literal_id key(s, msk, cmp, table, delay);
-    u32 numLiterals = verify_u32(literals.left.size());
 
     /* ue2_literals are always uppercased if nocase and must have an
      * alpha char */
 
-    RoseLiteralMap::iterator it;
-    bool inserted;
-    tie(it, inserted) = literals.insert(
-            RoseLiteralMap::value_type(key, numLiterals));
-    u32 id = it->right;
+    auto m = literals.insert(key);
+    u32 id = m.first;
+    bool inserted = m.second;
 
     if (inserted) {
         literal_info.push_back(rose_literal_info());
@@ -494,40 +479,14 @@ u32 RoseBuildImpl::getLiteralId(const ue2_literal &s, const vector<u8> &msk,
     return id;
 }
 
-bool RoseBuildImpl::hasLiteral(const ue2_literal &s,
-                               rose_literal_table table) const {
-    DEBUG_PRINTF("looking if %s exists\n", dumpString(s).c_str());
-    assert(table != ROSE_ANCHORED);
-
-    for (RoseLiteralMap::left_map::const_iterator it
-        = literals.left.lower_bound(rose_literal_id(s, table, 0));
-         it != literals.left.end(); ++it) {
-        if (it->first.table != table || it->first.s != s) {
-            break;
-        }
-        const rose_literal_info &info = literal_info[it->second];
-        if (!info.vertices.empty()) {
-            return true;
-        }
-    }
-
-    DEBUG_PRINTF("(used) literal not found\n");
-
-    return false;
-}
-
 u32 RoseBuildImpl::getNewLiteralId() {
     rose_literal_id key(ue2_literal(), ROSE_ANCHORED, 0);
-    u32 numLiterals = verify_u32(literals.left.size());
+    u32 numLiterals = verify_u32(literals.size());
     key.distinctiveness = numLiterals;
 
-    RoseLiteralMap::iterator it;
-    bool inserted;
-    tie(it, inserted)
-        = literals.insert(RoseLiteralMap::value_type(key, numLiterals));
-    u32 id = it->right;
-
-    assert(inserted);
+    auto m = literals.insert(key);
+    assert(m.second);
+    u32 id = m.first;
 
     literal_info.push_back(rose_literal_info());
     assert(literal_info.size() == id + 1);
@@ -537,262 +496,6 @@ u32 RoseBuildImpl::getNewLiteralId() {
     return id;
 }
 
-static
-bool requiresDedupe(const NGHolder &h, const ue2::flat_set<ReportID> &reports,
-                    const Grey &grey) {
-    /* TODO: tighten */
-    NFAVertex seen_vert = NFAGraph::null_vertex();
-
-    for (auto v : inv_adjacent_vertices_range(h.accept, h)) {
-        if (has_intersection(h[v].reports, reports)) {
-            if (seen_vert != NFAGraph::null_vertex()) {
-                return true;
-            }
-            seen_vert = v;
-        }
-    }
-
-    for (auto v : inv_adjacent_vertices_range(h.acceptEod, h)) {
-        if (has_intersection(h[v].reports, reports)) {
-            if (seen_vert != NFAGraph::null_vertex()) {
-                return true;
-            }
-            seen_vert = v;
-        }
-    }
-
-    if (seen_vert) {
-        /* if the reporting vertex is part of of a terminal repeat, the
-         * construction process may reform the graph splitting it into two
-         * vertices (pos, cyclic) and hence require dedupe */
-        vector<GraphRepeatInfo> repeats;
-        findRepeats(h, grey.minExtBoundedRepeatSize, &repeats);
-        for (const auto &repeat : repeats) {
-            if (find(repeat.vertices.begin(), repeat.vertices.end(),
-                     seen_vert) != repeat.vertices.end()) {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-class RoseDedupeAuxImpl : public RoseDedupeAux {
-public:
-    explicit RoseDedupeAuxImpl(const RoseBuildImpl &tbi_in);
-    bool requiresDedupeSupport(
-        const ue2::flat_set<ReportID> &reports) const override;
-
-    const RoseBuildImpl &tbi;
-    map<ReportID, set<RoseVertex>> vert_map;
-    map<ReportID, set<suffix_id>> suffix_map;
-    map<ReportID, set<const OutfixInfo *>> outfix_map;
-    map<ReportID, set<const raw_puff *>> puff_map;
-};
-
-unique_ptr<RoseDedupeAux> RoseBuildImpl::generateDedupeAux() const {
-    return ue2::make_unique<RoseDedupeAuxImpl>(*this);
-}
-
-RoseDedupeAux::~RoseDedupeAux() {
-}
-
-RoseDedupeAuxImpl::RoseDedupeAuxImpl(const RoseBuildImpl &tbi_in)
-    : tbi(tbi_in) {
-    const RoseGraph &g = tbi.g;
-
-    set<suffix_id> suffixes;
-
-    for (auto v : vertices_range(g)) {
-        // Literals in the small block table don't count as dupes: although
-        // they have copies in the anchored table, the two are never run in the
-        // same runtime invocation. All other literals count, though.
-        if (!tbi.hasLiteralInTable(v, ROSE_ANCHORED_SMALL_BLOCK)) {
-            for (const auto &report_id : g[v].reports) {
-                vert_map[report_id].insert(v);
-            }
-        }
-
-        // Several vertices may share a suffix, so we collect the set of
-        // suffixes first to avoid repeating work.
-        if (g[v].suffix) {
-            suffixes.insert(g[v].suffix);
-        }
-    }
-
-    for (const auto &suffix : suffixes) {
-        for (const auto &report_id : all_reports(suffix)) {
-            suffix_map[report_id].insert(suffix);
-        }
-    }
-
-    for (const auto &outfix : tbi.outfixes) {
-        assert(!outfix.nfa); /* should not be built yet */
-
-        for (const auto &report_id : all_reports(outfix)) {
-            outfix_map[report_id].insert(&outfix);
-        }
-    }
-
-    if (tbi.mpv_outfix) {
-        for (const auto &puff : tbi.mpv_outfix->puffettes) {
-            puff_map[puff.report].insert(&puff);
-        }
-        for (const auto &puff : tbi.mpv_outfix->triggered_puffettes) {
-            puff_map[puff.report].insert(&puff);
-        }
-    }
-}
-
-bool RoseDedupeAuxImpl::requiresDedupeSupport(
-    const ue2::flat_set<ReportID> &reports) const {
-    /* TODO: this could be expanded to check for offset or character
-       constraints */
-
-    const RoseGraph &g = tbi.g;
-
-    bool has_role = false;
-    bool has_suffix = false;
-    bool has_outfix = false;
-
-    if (reports.size() > 1) {
-        /* may have offset adjust */
-        /* TODO: work out if the offset adjust will actually cause problems */
-        return true;
-    }
-
-    set<RoseVertex> roles;
-    set<suffix_id> suffixes;
-    set<const OutfixInfo *> outfixes;
-    set<const raw_puff *> puffettes;
-    for (ReportID r : reports) {
-        if (contains(vert_map, r)) {
-            insert(&roles, vert_map.at(r));
-        }
-
-        if (contains(suffix_map, r)) {
-            insert(&suffixes, suffix_map.at(r));
-        }
-
-        if (contains(outfix_map, r)) {
-            insert(&outfixes, outfix_map.at(r));
-        }
-
-        if (contains(puff_map, r)) {
-            insert(&puffettes, puff_map.at(r));
-        }
-    }
-
-    /* roles */
-    for (auto v : roles) {
-        if (has_role) {
-            return true; /* fear that multiple roles may trigger at same
-                            offset */
-        }
-
-        has_role = true;
-
-        /* TODO: extend handled roles so that we don't have to worry about
-         * multiple literals */
-        if (g[v].literals.size() > 1) {
-            return true; /* fear that role may be triggered multiple times
-                          * at same offset. */
-        }
-
-        if (g[v].eod_accept) {
-            if (in_degree(v, g) > 1) {
-                /* may actually map to a number of terminal vertices */
-                return true;
-            }
-        }
-    }
-
-    /* suffixes */
-
-    for (const auto &suffix : suffixes) {
-        if (has_suffix || has_role) {
-            return true; /* scope for badness */
-        }
-
-        has_suffix = true;
-
-        /* some lesser suffix engines (nfas, haig, castle) can raise multiple
-         * matches for a report id at the same offset if there are multiple
-         * report states live. */
-        if (suffix.haig()) {
-            return true;
-        }
-        if (suffix.graph() &&
-            requiresDedupe(*suffix.graph(), reports, tbi.cc.grey)) {
-            return true;
-        }
-        if (suffix.castle() && requiresDedupe(*suffix.castle(), reports)) {
-            return true;
-        }
-    }
-
-    /* outfixes */
-
-    for (const auto &outfix_ptr : outfixes) {
-        assert(outfix_ptr);
-        const OutfixInfo &out = *outfix_ptr;
-        assert(!out.nfa); /* should not be built yet */
-
-        if (has_outfix || has_role || has_suffix) {
-            return true;
-        }
-        has_outfix = true;
-
-        if (out.haig) {
-            return true; /* haig may report matches with different SOM at the
-                            same offset */
-        }
-
-        if (out.holder && requiresDedupe(*out.holder, reports, tbi.cc.grey)) {
-            return true;
-        }
-    }
-
-    /* mpv */
-    for (UNUSED const auto &puff : puffettes) {
-        if (has_outfix || has_role || has_suffix) {
-            return true;
-        }
-        has_outfix = true;
-    }
-
-    /* boundary */
-    if (has_intersection(tbi.boundary.report_at_eod, reports)) {
-        if (has_outfix || has_role || has_suffix) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-// Sets the report ID for all vertices connected to an accept to `id`.
-void setReportId(NGHolder &g, ReportID id) {
-    // First, wipe the report IDs on all vertices.
-    for (auto v : vertices_range(g)) {
-        g[v].reports.clear();
-    }
-
-    // Any predecessors of accept get our id.
-    for (auto v : inv_adjacent_vertices_range(g.accept, g)) {
-        g[v].reports.insert(id);
-    }
-
-    // Same for preds of acceptEod, except accept itself.
-    for (auto v : inv_adjacent_vertices_range(g.acceptEod, g)) {
-        if (v == g.accept) {
-            continue;
-        }
-        g[v].reports.insert(id);
-    }
-}
-
 bool operator<(const RoseEdgeProps &a, const RoseEdgeProps &b) {
     ORDER_CHECK(minBound);
     ORDER_CHECK(maxBound);
@@ -800,25 +503,16 @@ bool operator<(const RoseEdgeProps &a, const RoseEdgeProps &b) {
     return false;
 }
 
-// Note: only clones the vertex, you'll have to wire up your own edges.
-RoseVertex RoseBuildImpl::cloneVertex(RoseVertex v) {
-    RoseVertex v2 = add_vertex(g[v], g);
-    g[v2].idx = vertexIndex++;
-
-    for (const auto &lit_id : g[v2].literals) {
-        literal_info[lit_id].vertices.insert(v2);
-    }
-
-    return v2;
-}
-
 #ifndef NDEBUG
-bool roseHasTops(const RoseGraph &g, RoseVertex v) {
+bool roseHasTops(const RoseBuildImpl &build, RoseVertex v) {
+    const RoseGraph &g = build.g;
     assert(g[v].left);
 
     set<u32> graph_tops;
-    for (const auto &e : in_edges_range(v, g)) {
-        graph_tops.insert(g[e].rose_top);
+    if (!build.isRootSuccessor(v)) {
+        for (const auto &e : in_edges_range(v, g)) {
+            graph_tops.insert(g[e].rose_top);
+        }
     }
 
     return is_subset_of(graph_tops, all_tops(g[v].left));
@@ -833,32 +527,40 @@ u32 OutfixInfo::get_queue(QueueIndexFactory &qif) {
     return queue;
 }
 
+namespace {
+class OutfixAllReports : public boost::static_visitor<set<ReportID>> {
+public:
+    set<ReportID> operator()(const boost::blank &) const {
+        return set<ReportID>();
+    }
+
+    template<class T>
+    set<ReportID> operator()(const unique_ptr<T> &x) const {
+        return all_reports(*x);
+    }
+
+    set<ReportID> operator()(const MpvProto &mpv) const {
+        set<ReportID> reports;
+        for (const auto &puff : mpv.puffettes) {
+            reports.insert(puff.report);
+        }
+        for (const auto &puff : mpv.triggered_puffettes) {
+            reports.insert(puff.report);
+        }
+        return reports;
+    }
+};
+}
+
 set<ReportID> all_reports(const OutfixInfo &outfix) {
-    set<ReportID> reports;
-    if (outfix.holder) {
-        insert(&reports, all_reports(*outfix.holder));
-    }
-    if (outfix.rdfa) {
-        insert(&reports, all_reports(*outfix.rdfa));
-    }
-    if (outfix.haig) {
-        insert(&reports, all_reports(*outfix.haig));
-    }
-
-    for (const auto &puff : outfix.puffettes) {
-        reports.insert(puff.report);
-    }
-    for (const auto &puff : outfix.triggered_puffettes) {
-        reports.insert(puff.report);
-    }
-
+    auto reports = boost::apply_visitor(OutfixAllReports(), outfix.proto);
     assert(!reports.empty());
     return reports;
 }
 
 bool RoseSuffixInfo::operator==(const RoseSuffixInfo &b) const {
     return top == b.top && graph == b.graph && castle == b.castle &&
-           rdfa == b.rdfa && haig == b.haig;
+           rdfa == b.rdfa && haig == b.haig && tamarama == b.tamarama;
 }
 
 bool RoseSuffixInfo::operator<(const RoseSuffixInfo &b) const {
@@ -868,11 +570,15 @@ bool RoseSuffixInfo::operator<(const RoseSuffixInfo &b) const {
     ORDER_CHECK(castle);
     ORDER_CHECK(haig);
     ORDER_CHECK(rdfa);
+    ORDER_CHECK(tamarama);
     assert(a.dfa_min_width == b.dfa_min_width);
     assert(a.dfa_max_width == b.dfa_max_width);
     return false;
 }
 
+size_t RoseSuffixInfo::hash() const {
+    return hash_all(top, graph, castle, rdfa, haig, tamarama);
+}
 
 void RoseSuffixInfo::reset(void) {
     top = 0;
@@ -880,13 +586,16 @@ void RoseSuffixInfo::reset(void) {
     castle.reset();
     rdfa.reset();
     haig.reset();
-    dfa_min_width = 0;
+    tamarama.reset();
+    dfa_min_width = depth(0);
     dfa_max_width = depth::infinity();
 }
 
 std::set<ReportID> all_reports(const suffix_id &s) {
     assert(s.graph() || s.castle() || s.haig() || s.dfa());
-    if (s.graph()) {
+    if (s.tamarama()) {
+        return all_reports(*s.tamarama());
+    } else if (s.graph()) {
         return all_reports(*s.graph());
     } else if (s.castle()) {
         return all_reports(*s.castle());
@@ -971,18 +680,9 @@ bool has_non_eod_accepts(const suffix_id &s) {
 set<u32> all_tops(const suffix_id &s) {
     assert(s.graph() || s.castle() || s.haig() || s.dfa());
     if (s.graph()) {
-        set<u32> tops;
-        const NGHolder &h = *s.graph();
-        for (const auto &e : out_edges_range(h.start, h)) {
-            if (target(e, h) == h.startDs) {
-                continue;
-            }
-            tops.insert(h[e].top);
-        }
-        if (tops.empty()) {
-            tops.insert(0); // Vacuous graph, triggered on zero top.
-        }
-        return tops;
+        flat_set<u32> tops = getTops(*s.graph());
+        assert(!tops.empty());
+        return {tops.begin(), tops.end()};
     }
 
     if (s.castle()) {
@@ -994,16 +694,7 @@ set<u32> all_tops(const suffix_id &s) {
 }
 
 size_t suffix_id::hash() const {
-    size_t val = 0;
-    hash_combine(val, g);
-    hash_combine(val, c);
-    hash_combine(val, d);
-    hash_combine(val, h);
-    return val;
-}
-
-size_t hash_value(const suffix_id &s) {
-    return s.hash();
+    return hash_all(g, c, d, h, t);
 }
 
 bool isAnchored(const left_id &r) {
@@ -1011,6 +702,13 @@ bool isAnchored(const left_id &r) {
     if (r.graph()) {
         return isAnchored(*r.graph());
     }
+    if (r.dfa()) {
+        return r.dfa()->start_anchored == DEAD_STATE;
+    }
+    if (r.haig()) {
+        return r.haig()->start_anchored == DEAD_STATE;
+    }
+
     // All other types are explicitly anchored.
     return true;
 }
@@ -1040,18 +738,8 @@ depth findMaxWidth(const left_id &r) {
 set<u32> all_tops(const left_id &r) {
     assert(r.graph() || r.castle() || r.haig() || r.dfa());
     if (r.graph()) {
-        set<u32> tops;
-        const NGHolder &h = *r.graph();
-        for (const auto &e : out_edges_range(h.start, h)) {
-            if (target(e, h) == h.startDs) {
-                continue;
-            }
-            tops.insert(h[e].top);
-        }
-        if (tops.empty()) {
-            tops.insert(0); // Vacuous graph, triggered on zero top.
-        }
-        return tops;
+        flat_set<u32> tops = getTops(*r.graph());
+        return {tops.begin(), tops.end()};
     }
 
     if (r.castle()) {
@@ -1062,21 +750,25 @@ set<u32> all_tops(const left_id &r) {
     return {0};
 }
 
+set<u32> all_reports(const left_id &left) {
+    assert(left.graph() || left.castle() || left.haig() || left.dfa());
+    if (left.graph()) {
+        return all_reports(*left.graph());
+    } else if (left.castle()) {
+        return all_reports(*left.castle());
+    } else if (left.dfa()) {
+        return all_reports(*left.dfa());
+    } else {
+        return all_reports(*left.haig());
+    }
+}
+
 u32 num_tops(const left_id &r) {
     return all_tops(r).size();
 }
 
 size_t left_id::hash() const {
-    size_t val = 0;
-    hash_combine(val, g);
-    hash_combine(val, c);
-    hash_combine(val, d);
-    hash_combine(val, h);
-    return val;
-}
-
-size_t hash_value(const left_id &r) {
-    return r.hash();
+    return hash_all(g, c, d, h);
 }
 
 u64a findMaxOffset(const set<ReportID> &reports, const ReportManager &rm) {
@@ -1093,14 +785,19 @@ u64a findMaxOffset(const set<ReportID> &reports, const ReportManager &rm) {
     return maxOffset;
 }
 
+size_t LeftEngInfo::hash() const {
+    return hash_all(graph, castle, dfa, haig, tamarama, lag, leftfix_report);
+}
+
 void LeftEngInfo::reset(void) {
     graph.reset();
     castle.reset();
     dfa.reset();
     haig.reset();
+    tamarama.reset();
     lag = 0;
     leftfix_report = MO_INVALID_IDX;
-    dfa_min_width = 0;
+    dfa_min_width = depth(0);
     dfa_max_width = depth::infinity();
 }
 
@@ -1112,51 +809,16 @@ LeftEngInfo::operator bool() const {
     return graph || castle || dfa || haig;
 }
 
-// Find the minimum depth in hops of each role. Note that a role may be
-// accessible from both the root and the anchored root.
-map<RoseVertex, u32> findDepths(const RoseBuildImpl &build) {
-    const RoseGraph &g = build.g;
-    map<RoseVertex, u32> depths;
-
-    depths[build.root] = 0;
-    depths[build.anchored_root] = 0;
-
-    // BFS from root first.
-    breadth_first_search(g, build.root, visitor(make_bfs_visitor(
-            record_distances(boost::make_assoc_property_map(depths),
-                             boost::on_tree_edge()))).
-            vertex_index_map(get(&RoseVertexProps::idx, g)));
-
-    // BFS from anchored root, updating depths in the graph when they get
-    // smaller.
-    map<RoseVertex, u32> depthsAnch;
-    breadth_first_search(g, build.anchored_root, visitor(make_bfs_visitor(
-            record_distances(boost::make_assoc_property_map(depthsAnch),
-                             boost::on_tree_edge()))).
-            vertex_index_map(get(&RoseVertexProps::idx, g)));
-    for (const auto &e : depthsAnch) {
-        if (contains(depths, e.first)) {
-            LIMIT_TO_AT_MOST(&depths[e.first], e.second);
-        } else {
-            depths.insert(e);
-        }
-    }
-
-    return depths;
-}
-
-u32 roseQuality(const RoseEngine *t) {
+u32 roseQuality(const RoseResources &res, const RoseEngine *t) {
     /* Rose is low quality if the atable is a Mcclellan 16 or has multiple DFAs
      */
-    const anchored_matcher_info *atable = getALiteralMatcher(t);
-    if (atable) {
-        if (atable->next_offset) {
+    if (res.has_anchored) {
+        if (res.has_anchored_multiple) {
             DEBUG_PRINTF("multiple atable engines\n");
             return 0;
         }
-        const NFA *nfa = (const NFA *)((const char *)atable + sizeof(*atable));
 
-        if (nfa->type != MCCLELLAN_NFA_8) {
+        if (res.has_anchored_large) {
             DEBUG_PRINTF("m16 atable engine\n");
             return 0;
         }
@@ -1165,12 +827,16 @@ u32 roseQuality(const RoseEngine *t) {
     /* if we always run multiple engines then we are slow */
     u32 always_run = 0;
 
-    if (atable) {
+    if (res.has_anchored) {
         always_run++;
     }
 
-    const HWLM *ftable = getFLiteralMatcher(t);
-    if (ftable) {
+    if (t->eagerIterOffset) {
+        /* eager prefixes are always run */
+        always_run++;
+    }
+
+    if (res.has_floating) {
         /* TODO: ignore conditional ftables, or ftables beyond smwr region */
         always_run++;
     }
@@ -1209,28 +875,57 @@ u32 roseQuality(const RoseEngine *t) {
     return 1;
 }
 
-/** \brief Add a SMWR engine to the given RoseEngine. */
-aligned_unique_ptr<RoseEngine> roseAddSmallWrite(const RoseEngine *t,
-                                                 const SmallWriteEngine *smwr) {
-    assert(t);
-    assert(smwr);
+u32 findMinOffset(const RoseBuildImpl &build, u32 lit_id) {
+    const auto &lit_vertices = build.literal_info.at(lit_id).vertices;
+    assert(!lit_vertices.empty());
 
-    const u32 mainSize = roseSize(t);
-    const u32 smallWriteSize = smwrSize(smwr);
+    u32 min_offset = UINT32_MAX;
+    for (const auto &v : lit_vertices) {
+        min_offset = min(min_offset, build.g[v].min_offset);
+    }
 
-    u32 smwrOffset = ROUNDUP_CL(mainSize);
-    u32 newSize = smwrOffset + smallWriteSize;
+    return min_offset;
+}
 
-    aligned_unique_ptr<RoseEngine> t2 =
-        aligned_zmalloc_unique<RoseEngine>(newSize);
-    char *ptr = (char *)t2.get();
-    memcpy(ptr, t, mainSize);
-    memcpy(ptr + smwrOffset, smwr, smallWriteSize);
+u32 findMaxOffset(const RoseBuildImpl &build, u32 lit_id) {
+    const auto &lit_vertices = build.literal_info.at(lit_id).vertices;
+    assert(!lit_vertices.empty());
 
-    t2->smallWriteOffset = smwrOffset;
-    t2->size = newSize;
+    u32 max_offset = 0;
+    for (const auto &v : lit_vertices) {
+        max_offset = max(max_offset, build.g[v].max_offset);
+    }
 
-    return t2;
+    return max_offset;
+}
+
+bool canEagerlyReportAtEod(const RoseBuildImpl &build, const RoseEdge &e) {
+    const auto &g = build.g;
+    const auto v = target(e, g);
+
+    if (!build.g[v].eod_accept) {
+        return false;
+    }
+
+    // If there's a graph between us and EOD, we shouldn't be eager.
+    if (build.g[v].left) {
+        return false;
+    }
+
+    // Must be exactly at EOD.
+    if (g[e].minBound != 0 || g[e].maxBound != 0) {
+        return false;
+    }
+
+    // In streaming mode, we can only eagerly report EOD for literals in the
+    // EOD-anchored table, as that's the only time we actually know where EOD
+    // is. In block mode, we always have this information.
+    const auto u = source(e, g);
+    if (build.cc.streaming && !build.isInETable(u)) {
+        return false;
+    }
+
+    return true;
 }
 
 #ifndef NDEBUG
@@ -1242,7 +937,7 @@ bool canImplementGraphs(const RoseBuildImpl &tbi) {
     // First, check the Rose leftfixes.
 
     for (auto v : vertices_range(g)) {
-        DEBUG_PRINTF("leftfix: check vertex %zu\n", g[v].idx);
+        DEBUG_PRINTF("leftfix: check vertex %zu\n", g[v].index);
 
         if (g[v].left.castle) {
             DEBUG_PRINTF("castle ok\n");
@@ -1258,10 +953,10 @@ bool canImplementGraphs(const RoseBuildImpl &tbi) {
         }
         if (g[v].left.graph) {
             assert(g[v].left.graph->kind
-                   == tbi.isRootSuccessor(v) ? NFA_PREFIX : NFA_INFIX);
+                   == (tbi.isRootSuccessor(v) ? NFA_PREFIX : NFA_INFIX));
             if (!isImplementableNFA(*g[v].left.graph, nullptr, tbi.cc)) {
-                DEBUG_PRINTF("nfa prefix %zu failed (%zu vertices)\n", g[v].idx,
-                             num_vertices(*g[v].left.graph));
+                DEBUG_PRINTF("nfa prefix %zu failed (%zu vertices)\n",
+                             g[v].index, num_vertices(*g[v].left.graph));
                 return false;
             }
         }
@@ -1270,7 +965,7 @@ bool canImplementGraphs(const RoseBuildImpl &tbi) {
     // Suffix graphs.
 
     for (auto v : vertices_range(g)) {
-        DEBUG_PRINTF("suffix: check vertex %zu\n", g[v].idx);
+        DEBUG_PRINTF("suffix: check vertex %zu\n", g[v].index);
 
         const RoseSuffixInfo &suffix = g[v].suffix;
         if (suffix.castle) {
@@ -1288,8 +983,8 @@ bool canImplementGraphs(const RoseBuildImpl &tbi) {
         if (suffix.graph) {
             assert(suffix.graph->kind == NFA_SUFFIX);
             if (!isImplementableNFA(*suffix.graph, &tbi.rm, tbi.cc)) {
-                DEBUG_PRINTF("nfa suffix %zu failed (%zu vertices)\n", g[v].idx,
-                             num_vertices(*suffix.graph));
+                DEBUG_PRINTF("nfa suffix %zu failed (%zu vertices)\n",
+                             g[v].index, num_vertices(*suffix.graph));
                 return false;
             }
         }
@@ -1297,6 +992,49 @@ bool canImplementGraphs(const RoseBuildImpl &tbi) {
 
     return true;
 }
+
+bool hasOrphanedTops(const RoseBuildImpl &build) {
+    const RoseGraph &g = build.g;
+
+    unordered_map<left_id, set<u32>> roses;
+    unordered_map<suffix_id, set<u32>> suffixes;
+
+    for (auto v : vertices_range(g)) {
+        if (g[v].left) {
+            set<u32> &tops = roses[g[v].left];
+            if (!build.isRootSuccessor(v)) {
+                // Tops for infixes come from the in-edges.
+                for (const auto &e : in_edges_range(v, g)) {
+                    tops.insert(g[e].rose_top);
+                }
+            }
+        }
+        if (g[v].suffix) {
+            suffixes[g[v].suffix].insert(g[v].suffix.top);
+        }
+    }
+
+    for (const auto &e : roses) {
+        if (all_tops(e.first) != e.second) {
+            DEBUG_PRINTF("rose tops (%s) don't match rose graph (%s)\n",
+                         as_string_list(all_tops(e.first)).c_str(),
+                         as_string_list(e.second).c_str());
+            return true;
+        }
+    }
+
+    for (const auto &e : suffixes) {
+        if (all_tops(e.first) != e.second) {
+            DEBUG_PRINTF("suffix tops (%s) don't match rose graph (%s)\n",
+                         as_string_list(all_tops(e.first)).c_str(),
+                         as_string_list(e.second).c_str());
+            return true;
+        }
+    }
+
+    return false;
+}
+
 #endif // NDEBUG
 
 } // namespace ue2

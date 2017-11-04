@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -36,10 +36,12 @@
 #include "rose/rose_build_impl.h"
 #include "util/container.h"
 #include "util/dump_charclass.h"
+#include "util/flat_containers.h"
 #include "util/graph_range.h"
 #include "util/graph.h"
-#include "util/ue2_containers.h"
+#include "util/hash.h"
 #include "util/ue2string.h"
+#include "util/unordered.h"
 
 #include <algorithm>
 #include <set>
@@ -51,7 +53,7 @@ namespace ue2 {
 static
 bool couldEndLiteral(const ue2_literal &s, NFAVertex initial,
                      const NGHolder &h) {
-    ue2::flat_set<NFAVertex> curr, next;
+    flat_set<NFAVertex> curr, next;
     curr.insert(initial);
 
     for (auto it = s.rbegin(), ite = s.rend(); it != ite; ++it) {
@@ -82,9 +84,10 @@ bool couldEndLiteral(const ue2_literal &s, NFAVertex initial,
     return true;
 }
 
+using EdgeCache = ue2_unordered_set<pair<NFAVertex, NFAVertex>>;
+
 static
-void contractVertex(NGHolder &g, NFAVertex v,
-                    ue2::unordered_set<pair<NFAVertex, NFAVertex>> &all_edges) {
+void contractVertex(NGHolder &g, NFAVertex v, EdgeCache &all_edges) {
     for (auto u : inv_adjacent_vertices_range(v, g)) {
         if (u == v) {
             continue; // self-edge
@@ -108,14 +111,9 @@ void contractVertex(NGHolder &g, NFAVertex v,
 }
 
 static
-u32 findMaxInfixMatches(const NGHolder &h, const set<ue2_literal> &lits) {
+u32 findMaxLiteralMatches(const NGHolder &h, const set<ue2_literal> &lits) {
     DEBUG_PRINTF("h=%p, %zu literals\n", &h, lits.size());
-    //dumpGraph("infix.dot", h.g);
-
-    if (!onlyOneTop(h)) {
-        DEBUG_PRINTF("more than one top!n");
-        return NO_MATCH_LIMIT;
-    }
+    //dumpGraph("infix.dot", h);
 
     // Indices of vertices that could terminate any of the literals in 'lits'.
     set<u32> terms;
@@ -149,8 +147,9 @@ u32 findMaxInfixMatches(const NGHolder &h, const set<ue2_literal> &lits) {
     cloneHolder(g, h);
     vector<NFAVertex> dead;
 
-    // The set of all edges in the graph is used for existence checks in contractVertex.
-    ue2::unordered_set<pair<NFAVertex, NFAVertex>> all_edges;
+    // The set of all edges in the graph is used for existence checks in
+    // contractVertex.
+    EdgeCache all_edges;
     for (const auto &e : edges_range(g)) {
         all_edges.emplace(source(e, g), target(e, g));
     }
@@ -168,7 +167,7 @@ u32 findMaxInfixMatches(const NGHolder &h, const set<ue2_literal> &lits) {
     }
 
     remove_vertices(dead, g);
-    //dumpGraph("relaxed.dot", g.g);
+    //dumpGraph("relaxed.dot", g);
 
     depth maxWidth = findMaxWidth(g);
     DEBUG_PRINTF("maxWidth=%s\n", maxWidth.str().c_str());
@@ -262,7 +261,11 @@ u32 findMaxInfixMatches(const left_id &left, const set<ue2_literal> &lits) {
         return findMaxInfixMatches(*left.castle(), lits);
     }
     if (left.graph()) {
-        return findMaxInfixMatches(*left.graph(), lits);
+        if (!onlyOneTop(*left.graph())) {
+            DEBUG_PRINTF("more than one top!n");
+            return NO_MATCH_LIMIT;
+        }
+        return findMaxLiteralMatches(*left.graph(), lits);
     }
 
     return NO_MATCH_LIMIT;
@@ -279,7 +282,7 @@ void findCountingMiracleInfo(const left_id &left, const vector<u8> &stopTable,
 
     const NGHolder &g = *left.graph();
 
-    auto cyclics = findVerticesInCycles(g);
+    auto cyclics = find_vertices_in_cycles(g);
 
     if (!proper_out_degree(g.startDs, g)) {
         cyclics.erase(g.startDs);
@@ -287,7 +290,7 @@ void findCountingMiracleInfo(const left_id &left, const vector<u8> &stopTable,
 
     CharReach cyclic_cr;
     for (NFAVertex v : cyclics) {
-        DEBUG_PRINTF("considering %u ||=%zu\n", g[v].index,
+        DEBUG_PRINTF("considering %zu ||=%zu\n", g[v].index,
                       g[v].char_reach.count());
         cyclic_cr |= g[v].char_reach;
     }
@@ -315,7 +318,7 @@ void findCountingMiracleInfo(const left_id &left, const vector<u8> &stopTable,
         lits.insert(ue2_literal(c, false));
     }
 
-    u32 count = findMaxInfixMatches(*left.graph(), lits);
+    u32 count = findMaxLiteralMatches(*left.graph(), lits);
     DEBUG_PRINTF("counting miracle %u\n", count + 1);
     if (count && count < 50) {
         *cm_count = count + 1;

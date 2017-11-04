@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -36,6 +36,7 @@
 #include "ue2common.h"
 #include "util/compare.h"
 #include "util/dump_mask.h"
+#include "util/dump_util.h"
 
 #include <cstdlib>
 #include <cstdio>
@@ -46,10 +47,11 @@
 #error No dump support!
 #endif
 
-namespace ue2 {
+/* Note: No dot files for MPV */
 
-void nfaExecMpv0_dumpDot(UNUSED const NFA *nfa, UNUSED FILE *file) {
-}
+using namespace std;
+
+namespace ue2 {
 
 static really_inline
 u32 largest_puff_repeat(const mpv *m, const mpv_kilopuff *kp) {
@@ -108,6 +110,9 @@ void dumpKilo(FILE *f, const mpv *m, const mpv_kilopuff *k) {
         fprintf(f, "    Puffette %u\n", i);
         fprintf(f, "        repeats:   %u%s\n", p[i].repeats,
                 p[i].unbounded ? "," : "");
+        if (p[i].simple_exhaust) {
+            fprintf(f, "        simple exhaustible\n");
+        }
         fprintf(f, "        report id: %u\n", p[i].report);
     }
 
@@ -124,8 +129,10 @@ void dumpCounter(FILE *f, const mpv_counter_info *c) {
     fprintf(f, "\n");
 }
 
-void nfaExecMpv0_dumpText(const NFA *nfa, FILE *f) {
+void nfaExecMpv_dump(const NFA *nfa, const string &base) {
     const mpv *m = (const mpv *)getImplNfa(nfa);
+
+    StdioFile f(base + ".txt", "w");
 
     fprintf(f, "Puff the Magic Engines\n");
     fprintf(f, "\n");

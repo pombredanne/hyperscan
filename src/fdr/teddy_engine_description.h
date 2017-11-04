@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -45,8 +45,6 @@ struct TeddyEngineDef {
     u32 numMasks;
     u32 numBuckets;
     bool packed;
-    u32 confirmPullBackDistance;
-    u32 confirmTopLevelSplit;
 };
 
 class TeddyEngineDescription : public EngineDescription {
@@ -57,7 +55,6 @@ public:
     explicit TeddyEngineDescription(const TeddyEngineDef &def);
 
     u32 getDefaultFloodSuffixLength() const override;
-    bool needConfirm(const std::vector<hwlmLiteral> &lits) const;
 };
 
 std::unique_ptr<TeddyEngineDescription>

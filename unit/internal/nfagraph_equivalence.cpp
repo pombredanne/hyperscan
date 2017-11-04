@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -27,7 +27,8 @@
  */
 
 /**
- * Unit tests for checking the removeGraphEquivalences code in nfagraph/ng_equivalence.cpp.
+ * Unit tests for checking the removeGraphEquivalences code in
+ * nfagraph/ng_equivalence.cpp.
  */
 
 #include "config.h"
@@ -53,7 +54,7 @@ TEST(NFAGraph, RemoveEquivalence1) {
     // The graph should be merged into: a(b|c)
     CompileContext cc(false, false, get_current_target(), Grey());
 
-    unique_ptr<NGWrapper> graph(constructGraphWithCC("(ab|ac)", cc, 0));
+    auto graph(constructGraphWithCC("(ab|ac)", cc, 0));
     ASSERT_TRUE(graph != nullptr);
     NGHolder &g = *graph;
     g.kind = NFA_SUFFIX;
@@ -71,10 +72,9 @@ TEST(NFAGraph, RemoveEquivalence1) {
     ASSERT_EQ(2U, in_degree(g.accept, g));
 
     // Find a vertex that goes right after startDs
-    NFAVertex a = NFAGraph::null_vertex();
-    NFAGraph::adjacency_iterator ai, ae;
-    for (tie(ai, ae) = adjacent_vertices(g.startDs, g); ai != ae; ++ai) {
-        a = *ai;
+    NFAVertex a = NGHolder::null_vertex();
+    for (NFAVertex v : adjacent_vertices_range(g.startDs, g)) {
+        a = v;
         if (a == g.startDs) {
             continue;
         }
@@ -84,11 +84,11 @@ TEST(NFAGraph, RemoveEquivalence1) {
         ASSERT_TRUE(tmpcr.test('a'));
     }
     // check if we found our vertex
-    ASSERT_TRUE(a != nullptr);
+    ASSERT_TRUE(a != NGHolder::null_vertex());
 
     // There should be two edges from v to nodes with reachability 'b' and 'c'
-    NFAVertex b = NFAGraph::null_vertex();
-    NFAVertex c = NFAGraph::null_vertex();
+    NFAVertex b = NGHolder::null_vertex();
+    NFAVertex c = NGHolder::null_vertex();
     for (NFAVertex tmp : adjacent_vertices_range(a, g)) {
         const CharReach &tmpcr = g[tmp].char_reach;
         ASSERT_EQ(1U, tmpcr.count());
@@ -101,8 +101,8 @@ TEST(NFAGraph, RemoveEquivalence1) {
         }
     }
     // check if we found our vertices
-    ASSERT_TRUE(b != nullptr);
-    ASSERT_TRUE(c != nullptr);
+    ASSERT_TRUE(b != NGHolder::null_vertex());
+    ASSERT_TRUE(c != NGHolder::null_vertex());
 
     // both vertices should have an edge to accept
     ASSERT_TRUE(edge(b, g.accept, g).second);
@@ -115,7 +115,7 @@ TEST(NFAGraph, RemoveEquivalence2) {
     // The graph should be merged into: (b|c)a
     CompileContext cc(false, false, get_current_target(), Grey());
 
-    unique_ptr<NGWrapper> graph(constructGraphWithCC("(ba|ca)", cc, 0));
+    auto graph(constructGraphWithCC("(ba|ca)", cc, 0));
     ASSERT_TRUE(graph != nullptr);
     NGHolder &g = *graph;
     g.kind = NFA_SUFFIX;
@@ -133,11 +133,9 @@ TEST(NFAGraph, RemoveEquivalence2) {
     ASSERT_EQ(1U, in_degree(g.accept, g));
 
     // Find a vertex leading to accept
-    NFAVertex a = NFAGraph::null_vertex();
-    NFAGraph::inv_adjacency_iterator ai, ae;
-    for (tie(ai, ae) = inv_adjacent_vertices(g.accept, g); ai != ae;
-         ++ai) {
-        a = *ai;
+    NFAVertex a = NGHolder::null_vertex();
+    for (NFAVertex v : inv_adjacent_vertices_range(g.accept, g)) {
+        a = v;
         if (a == g.accept) {
             continue;
         }
@@ -147,11 +145,11 @@ TEST(NFAGraph, RemoveEquivalence2) {
         ASSERT_TRUE(tmpcr.test('a'));
     }
     // check if we found our vertex
-    ASSERT_TRUE(a != nullptr);
+    ASSERT_TRUE(a != NGHolder::null_vertex());
 
     // There should be two edges from v to nodes with reachability 'b' and 'c'
-    NFAVertex b = NFAGraph::null_vertex();
-    NFAVertex c = NFAGraph::null_vertex();
+    NFAVertex b = NGHolder::null_vertex();
+    NFAVertex c = NGHolder::null_vertex();
     for (NFAVertex tmp : inv_adjacent_vertices_range(a, g)) {
         const CharReach &tmpcr = g[tmp].char_reach;
         ASSERT_EQ(1U, tmpcr.count());
@@ -164,8 +162,8 @@ TEST(NFAGraph, RemoveEquivalence2) {
         }
     }
     // check if we found our vertices
-    ASSERT_TRUE(b != nullptr);
-    ASSERT_TRUE(c != nullptr);
+    ASSERT_TRUE(b != NGHolder::null_vertex());
+    ASSERT_TRUE(c != NGHolder::null_vertex());
 
     // both new vertices should have edges from startDs
     ASSERT_TRUE(edge(g.startDs, b, g).second);
@@ -178,8 +176,7 @@ TEST(NFAGraph, RemoveEquivalence3) {
     // The graph should be merged into: a(..)+(X|Y)
     CompileContext cc(false, false, get_current_target(), Grey());
 
-    unique_ptr<NGWrapper> graph(constructGraphWithCC("a(..)+X|a(..)+Y", cc,
-            HS_FLAG_DOTALL));
+    auto graph(constructGraphWithCC("a(..)+X|a(..)+Y", cc, HS_FLAG_DOTALL));
     ASSERT_TRUE(graph != nullptr);
     NGHolder &g = *graph;
     g.kind = NFA_SUFFIX;
@@ -197,10 +194,9 @@ TEST(NFAGraph, RemoveEquivalence3) {
     ASSERT_EQ(2U, in_degree(g.accept, g));
 
     // Find a vertex 'a' that goes right after startDs
-    NFAVertex a = NFAGraph::null_vertex();
-    NFAGraph::adjacency_iterator ai, ae;
-    for (tie(ai, ae) = adjacent_vertices(g.startDs, g); ai != ae; ++ai) {
-        a = *ai;
+    NFAVertex a = NGHolder::null_vertex();
+    for (NFAVertex v : adjacent_vertices_range(g.startDs, g)) {
+        a = v;
         if (a == g.startDs) {
             continue;
         }
@@ -210,7 +206,7 @@ TEST(NFAGraph, RemoveEquivalence3) {
         ASSERT_TRUE(tmpcr.test('a'));
     }
     // check if we found our 'a'
-    ASSERT_TRUE(a != nullptr);
+    ASSERT_TRUE(a != NGHolder::null_vertex());
 
     // There should be an edge from 'a' to '.'
     ASSERT_EQ(1U, out_degree(a, g));
@@ -234,11 +230,9 @@ TEST(NFAGraph, RemoveEquivalence3) {
     ASSERT_TRUE(edge(dot2, dot1, g).second);
 
     // now, let's find X and Y nodes
-    NFAVertex X = NFAGraph::null_vertex();
-    NFAVertex Y = NFAGraph::null_vertex();
-    for (tie(ai, ae) = adjacent_vertices(dot2, g); ai != ae; ++ai) {
-        NFAVertex tmp = *ai;
-
+    NFAVertex X = NGHolder::null_vertex();
+    NFAVertex Y = NGHolder::null_vertex();
+    for (NFAVertex tmp : adjacent_vertices_range(dot2, g)) {
         // we already know about dot1, so skip it
         if (tmp == dot1) {
             continue;
@@ -255,8 +249,8 @@ TEST(NFAGraph, RemoveEquivalence3) {
         }
     }
     // check if we found both vertices
-    ASSERT_TRUE(X != nullptr);
-    ASSERT_TRUE(Y != nullptr);
+    ASSERT_TRUE(X != NGHolder::null_vertex());
+    ASSERT_TRUE(Y != NGHolder::null_vertex());
 
     // finally, check if these two vertices only have edges to accept
     ASSERT_EQ(1U, out_degree(X, g));
@@ -271,8 +265,7 @@ TEST(NFAGraph, RemoveEquivalence4) {
     // The graph should be merged into: (X|Y)(..)+a
     CompileContext cc(false, false, get_current_target(), Grey());
 
-    unique_ptr<NGWrapper> graph(constructGraphWithCC("X(..)+a|Y(..)+a", cc,
-            HS_FLAG_DOTALL));
+    auto graph(constructGraphWithCC("X(..)+a|Y(..)+a", cc, HS_FLAG_DOTALL));
     ASSERT_TRUE(graph != nullptr);
     NGHolder &g = *graph;
     g.kind = NFA_SUFFIX;
@@ -290,12 +283,9 @@ TEST(NFAGraph, RemoveEquivalence4) {
     ASSERT_EQ(1U, in_degree(g.accept, g));
 
     // Find X and Y nodes that are connected to startDs
-    NFAVertex X = NFAGraph::null_vertex();
-    NFAVertex Y = NFAGraph::null_vertex();
-    NFAGraph::adjacency_iterator ai, ae;
-    for (tie(ai, ae) = adjacent_vertices(g.startDs, g); ai != ae; ++ai) {
-        NFAVertex tmp = *ai;
-
+    NFAVertex X = NGHolder::null_vertex();
+    NFAVertex Y = NGHolder::null_vertex();
+    for (NFAVertex tmp : adjacent_vertices_range(g.startDs, g)) {
         // skip startDs
         if (tmp == g.startDs) {
             continue;
@@ -313,8 +303,8 @@ TEST(NFAGraph, RemoveEquivalence4) {
         }
     }
     // check if we found both vertices
-    ASSERT_TRUE(X != nullptr);
-    ASSERT_TRUE(Y != nullptr);
+    ASSERT_TRUE(X != NGHolder::null_vertex());
+    ASSERT_TRUE(Y != NGHolder::null_vertex());
 
     // now, find first dot from X
     ASSERT_EQ(1U, out_degree(X, g));
@@ -341,10 +331,8 @@ TEST(NFAGraph, RemoveEquivalence4) {
     ASSERT_TRUE(edge(dot2, dot1, g).second);
 
     // now find 'a'
-    NFAVertex a = NFAGraph::null_vertex();
-    for (tie(ai, ae) = adjacent_vertices(dot2, g); ai != ae; ++ai) {
-        NFAVertex tmp = *ai;
-
+    NFAVertex a = NGHolder::null_vertex();
+    for (NFAVertex tmp : adjacent_vertices_range(dot2, g)) {
         // skip dot1
         if (tmp == dot1) {
             continue;
@@ -360,7 +348,7 @@ TEST(NFAGraph, RemoveEquivalence4) {
         }
     }
     // make sure we found our 'a'
-    ASSERT_TRUE(a != nullptr);
+    ASSERT_TRUE(a != NGHolder::null_vertex());
 
     // now, check if 'a' has an edge to accept
     ASSERT_EQ(1U, out_degree(a, g));
@@ -373,8 +361,7 @@ TEST(NFAGraph, RemoveEquivalence5) {
     // The graph should be merged into: [^\x00]*[\x00]
     CompileContext cc(false, false, get_current_target(), Grey());
 
-    unique_ptr<NGWrapper> graph(constructGraphWithCC("[^\\x00][^\\x00]*[\\x00]",
-            cc, 0));
+    auto graph(constructGraphWithCC("[^\\x00][^\\x00]*[\\x00]", cc, 0));
     ASSERT_TRUE(graph != nullptr);
     NGHolder &g = *graph;
     g.kind = NFA_PREFIX;
@@ -392,10 +379,9 @@ TEST(NFAGraph, RemoveEquivalence5) {
     ASSERT_EQ(1U, in_degree(g.accept, g));
 
     // find first vertex and ensure it has a self loop
-    NFAVertex v = NFAGraph::null_vertex();
-    NFAGraph::adjacency_iterator ai, ae;
-    for (tie(ai, ae) = adjacent_vertices(g.startDs, g); ai != ae; ++ai) {
-        v = *ai;
+    NFAVertex v = NGHolder::null_vertex();
+    for (NFAVertex t : adjacent_vertices_range(g.startDs, g)) {
+        v = t;
         if (v == g.startDs) {
             continue;
         }
@@ -406,18 +392,16 @@ TEST(NFAGraph, RemoveEquivalence5) {
         ASSERT_TRUE(edge(v, v, g).second);
     }
     // check if we found our vertex
-    ASSERT_TRUE(v != nullptr);
+    ASSERT_TRUE(v != NGHolder::null_vertex());
 
     // now, find the vertex leading to accept
-    NFAVertex v2 = NFAGraph::null_vertex();
-    for (tie(ai, ae) = adjacent_vertices(v, g); ai != ae; ++ai) {
-        NFAVertex tmp = *ai;
-
+    NFAVertex v2 = NGHolder::null_vertex();
+    for (NFAVertex tmp : adjacent_vertices_range(v, g)) {
         // skip self-loop
         if (tmp == v) {
             continue;
         }
-        v2 = *ai;
+        v2 = tmp;
         // get char reach
         const CharReach tmpcr = g[tmp].char_reach;
 
@@ -426,14 +410,14 @@ TEST(NFAGraph, RemoveEquivalence5) {
         ASSERT_TRUE(edge(tmp, g.accept, g).second);
     }
     // check if we found our vertex
-    ASSERT_TRUE(v2 != nullptr);
+    ASSERT_TRUE(v2 != NGHolder::null_vertex());
 }
 
 // catching UE-2692
 TEST(NFAGraph, RemoveEquivalence6) {
     // Build a small graph with two redundant vertices: ^(.*|.*)a
     // The graph should be merged into: a
-    unique_ptr<NGWrapper> graph(constructGraph("^(.*|.*)a", HS_FLAG_DOTALL));
+    auto graph(constructGraph("^(.*|.*)a", HS_FLAG_DOTALL));
     ASSERT_TRUE(graph != nullptr);
     NGHolder &g = *graph;
 
@@ -450,10 +434,9 @@ TEST(NFAGraph, RemoveEquivalence6) {
     ASSERT_EQ(1U, in_degree(g.accept, g));
 
     // find that vertex and ensure it has no self loops and an edge to accept
-    NFAVertex v = NFAGraph::null_vertex();
-    NFAGraph::adjacency_iterator ai, ae;
-    for (tie(ai, ae) = adjacent_vertices(g.startDs, g); ai != ae; ++ai) {
-        v = *ai;
+    NFAVertex v = NGHolder::null_vertex();
+    for (NFAVertex t : adjacent_vertices_range(g.startDs, g)) {
+        v = t;
         if (v == g.startDs) {
             continue;
         }
@@ -465,14 +448,14 @@ TEST(NFAGraph, RemoveEquivalence6) {
         ASSERT_TRUE(edge(v, g.accept, g).second);
     }
     // check if we found our vertex
-    ASSERT_TRUE(v != nullptr);
+    ASSERT_TRUE(v != NGHolder::null_vertex());
 }
 
 // catching UE-2692
 TEST(NFAGraph, RemoveEquivalence7) {
     // Build a small graph with no redundant vertices: ^.+a
     // Make sure we don't merge anything
-    unique_ptr<NGWrapper> graph(constructGraph("^.+a", HS_FLAG_DOTALL));
+    auto graph(constructGraph("^.+a", HS_FLAG_DOTALL));
     ASSERT_TRUE(graph != nullptr);
     NGHolder &g = *graph;
 
@@ -492,13 +475,12 @@ TEST(NFAGraph, RemoveEquivalence7) {
     ASSERT_EQ(1U, in_degree(g.accept, g));
 
     // find that vertex and ensure it's a dot self loop and has one outgoing edge
-    NFAVertex v = NFAGraph::null_vertex();
-    NFAGraph::adjacency_iterator ai, ae;
-    for (tie(ai, ae) = adjacent_vertices(g.start, g); ai != ae; ++ai) {
-        if (*ai == g.startDs) {
+    NFAVertex v = NGHolder::null_vertex();
+    for (NFAVertex t : adjacent_vertices_range(g.start, g)) {
+        if (t == g.startDs) {
             continue;
         }
-        v = *ai;
+        v = t;
         // check if it has the right char reach
         const CharReach &tmpcr = g[v].char_reach;
         ASSERT_TRUE(tmpcr.all());
@@ -506,16 +488,16 @@ TEST(NFAGraph, RemoveEquivalence7) {
         ASSERT_EQ(1U, proper_out_degree(v, g));
     }
     // check if we found our vertex
-    ASSERT_TRUE(v != nullptr);
+    ASSERT_TRUE(v != NGHolder::null_vertex());
 
     // find the next vertex and ensure it has an edge to accept
-    NFAVertex v2 = NFAGraph::null_vertex();
-    for (tie(ai, ae) = adjacent_vertices(v, g); ai != ae; ++ai) {
+    NFAVertex v2 = NGHolder::null_vertex();
+    for (NFAVertex t : adjacent_vertices_range(v, g)) {
         // skip self loop
-        if (*ai == v) {
+        if (t == v) {
             continue;
         }
-        v2 = *ai;
+        v2 = t;
         // check if it has the right char reach
         const CharReach &tmpcr = g[v2].char_reach;
         ASSERT_EQ(1U, tmpcr.count());
@@ -525,7 +507,7 @@ TEST(NFAGraph, RemoveEquivalence7) {
         ASSERT_TRUE(edge(v2, g.accept, g).second);
     }
     // check if we found our vertex
-    ASSERT_TRUE(v2 != nullptr);
+    ASSERT_TRUE(v2 != NGHolder::null_vertex());
 }
 
 TEST(NFAGraph, RemoveEquivalence_Reports1) {

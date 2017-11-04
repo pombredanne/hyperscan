@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -37,7 +37,6 @@
 #include "util/container.h"
 #include "util/graph.h"
 #include "util/graph_range.h"
-#include "util/ue2_containers.h"
 
 #include <map>
 #include <set>
@@ -63,12 +62,13 @@ void clearAccepts(NGHolder &g) {
 }
 
 static
-void filterSplitMap(const NGHolder &g, ue2::unordered_map<NFAVertex, NFAVertex> *out_map) {
-    ue2::unordered_set<NFAVertex> verts;
+void filterSplitMap(const NGHolder &g,
+                    unordered_map<NFAVertex, NFAVertex> *out_map) {
+    unordered_set<NFAVertex> verts;
     insert(&verts, vertices(g));
-    ue2::unordered_map<NFAVertex, NFAVertex>::iterator it = out_map->begin();
+    auto it = out_map->begin();
     while (it != out_map->end()) {
-        ue2::unordered_map<NFAVertex, NFAVertex>::iterator jt = it;
+        auto jt = it;
         ++it;
         if (!contains(verts, jt->second)) {
             out_map->erase(jt);
@@ -78,8 +78,8 @@ void filterSplitMap(const NGHolder &g, ue2::unordered_map<NFAVertex, NFAVertex> 
 
 static
 void splitLHS(const NGHolder &base, const vector<NFAVertex> &pivots,
-              const vector<NFAVertex> &rhs_pivots,
-              NGHolder *lhs, ue2::unordered_map<NFAVertex, NFAVertex> *lhs_map) {
+              const vector<NFAVertex> &rhs_pivots, NGHolder *lhs,
+              unordered_map<NFAVertex, NFAVertex> *lhs_map) {
     assert(lhs && lhs_map);
 
     cloneHolder(*lhs, base, lhs_map);
@@ -87,7 +87,7 @@ void splitLHS(const NGHolder &base, const vector<NFAVertex> &pivots,
     clearAccepts(*lhs);
 
     for (auto pivot : pivots) {
-        DEBUG_PRINTF("pivot is %u lv %zu lm %zu\n", base[pivot].index,
+        DEBUG_PRINTF("pivot is %zu lv %zu lm %zu\n", base[pivot].index,
                      num_vertices(*lhs), lhs_map->size());
         assert(contains(*lhs_map, pivot));
 
@@ -100,7 +100,12 @@ void splitLHS(const NGHolder &base, const vector<NFAVertex> &pivots,
         add_edge((*lhs_map)[pivot], lhs->accept, *lhs);
     }
 
-    pruneUseless(*lhs);
+    /* should do the renumbering unconditionally as we know edges are already
+     * misnumbered */
+    pruneUseless(*lhs, false);
+    renumber_edges(*lhs);
+    renumber_vertices(*lhs);
+
     filterSplitMap(*lhs, lhs_map);
 
     switch (base.kind) {
@@ -112,14 +117,21 @@ void splitLHS(const NGHolder &base, const vector<NFAVertex> &pivots,
     case NFA_SUFFIX:
         lhs->kind = NFA_INFIX;
         break;
+    case NFA_EAGER_PREFIX:
+        /* Current code should not be assigning eager until well after all the
+         * splitting is done. */
+        assert(0);
+        lhs->kind = NFA_EAGER_PREFIX;
+        break;
     case NFA_REV_PREFIX:
+    case NFA_OUTFIX_RAW:
         assert(0);
         break;
     }
 }
 
 void splitLHS(const NGHolder &base, NFAVertex pivot,
-              NGHolder *lhs, ue2::unordered_map<NFAVertex, NFAVertex> *lhs_map) {
+              NGHolder *lhs, unordered_map<NFAVertex, NFAVertex> *lhs_map) {
     vector<NFAVertex> pivots(1, pivot);
     vector<NFAVertex> rhs_pivots;
     insert(&rhs_pivots, rhs_pivots.end(), adjacent_vertices(pivot, base));
@@ -127,7 +139,7 @@ void splitLHS(const NGHolder &base, NFAVertex pivot,
 }
 
 void splitRHS(const NGHolder &base, const vector<NFAVertex> &pivots,
-              NGHolder *rhs, ue2::unordered_map<NFAVertex, NFAVertex> *rhs_map) {
+              NGHolder *rhs, unordered_map<NFAVertex, NFAVertex> *rhs_map) {
     assert(rhs && rhs_map);
 
     cloneHolder(*rhs, base, rhs_map);
@@ -139,9 +151,15 @@ void splitRHS(const NGHolder &base, const vector<NFAVertex> &pivots,
 
     for (auto pivot : pivots) {
         assert(contains(*rhs_map, pivot));
-        add_edge(rhs->start, (*rhs_map)[pivot], *rhs);
+        NFAEdge e = add_edge(rhs->start, (*rhs_map)[pivot], *rhs);
+        (*rhs)[e].tops.insert(DEFAULT_TOP);
     }
-    pruneUseless(*rhs);
+
+     /* should do the renumbering unconditionally as we know edges are already
+      * misnumbered */
+    pruneUseless(*rhs, false);
+    renumber_edges(*rhs);
+    renumber_vertices(*rhs);
     filterSplitMap(*rhs, rhs_map);
 
     switch (base.kind) {
@@ -153,7 +171,14 @@ void splitRHS(const NGHolder &base, const vector<NFAVertex> &pivots,
     case NFA_OUTFIX:
         rhs->kind = NFA_SUFFIX;
         break;
+    case NFA_EAGER_PREFIX:
+        /* Current code should not be assigning eager until well after all the
+         * splitting is done. */
+        assert(0);
+        rhs->kind = NFA_INFIX;
+        break;
     case NFA_REV_PREFIX:
+    case NFA_OUTFIX_RAW:
         assert(0);
         break;
     }
@@ -166,8 +191,8 @@ void findCommonSuccessors(const NGHolder &g, const vector<NFAVertex> &pivots,
                           vector<NFAVertex> &succ) {
     assert(!pivots.empty());
 
-    // Note: for determinism, we must sort our successor sets by vertex_index.
-    set<NFAVertex, VertexIndexOrdering<NGHolder> > adj(g), adj_temp(g);
+    set<NFAVertex> adj;
+    set<NFAVertex> adj_temp;
 
     insert(&adj, adjacent_vertices(pivots.at(0), g));
 
@@ -186,11 +211,12 @@ void findCommonSuccessors(const NGHolder &g, const vector<NFAVertex> &pivots,
 }
 
 void splitGraph(const NGHolder &base, const vector<NFAVertex> &pivots,
-                NGHolder *lhs, ue2::unordered_map<NFAVertex, NFAVertex> *lhs_map,
-                NGHolder *rhs, ue2::unordered_map<NFAVertex, NFAVertex> *rhs_map) {
+                NGHolder *lhs, unordered_map<NFAVertex, NFAVertex> *lhs_map,
+                NGHolder *rhs, unordered_map<NFAVertex, NFAVertex> *rhs_map) {
     DEBUG_PRINTF("splitting graph at %zu vertices\n", pivots.size());
 
     assert(!has_parallel_edge(base));
+    assert(isCorrectlyTopped(base));
 
     /* RHS pivots are built from the common set of successors of pivots. */
     vector<NFAVertex> rhs_pivots;
@@ -204,11 +230,13 @@ void splitGraph(const NGHolder &base, const vector<NFAVertex> &pivots,
 
     assert(!has_parallel_edge(*lhs));
     assert(!has_parallel_edge(*rhs));
+    assert(isCorrectlyTopped(*lhs));
+    assert(isCorrectlyTopped(*rhs));
 }
 
 void splitGraph(const NGHolder &base, NFAVertex pivot,
-                NGHolder *lhs, ue2::unordered_map<NFAVertex, NFAVertex> *lhs_map,
-                NGHolder *rhs, ue2::unordered_map<NFAVertex, NFAVertex> *rhs_map) {
+                NGHolder *lhs, unordered_map<NFAVertex, NFAVertex> *lhs_map,
+                NGHolder *rhs, unordered_map<NFAVertex, NFAVertex> *rhs_map) {
     vector<NFAVertex> pivots(1, pivot);
     splitGraph(base, pivots, lhs, lhs_map, rhs, rhs_map);
 }

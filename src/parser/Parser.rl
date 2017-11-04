@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -34,6 +34,7 @@
 
 /* Parser.cpp is a built source, may not be in same dir as parser files */
 #include "parser/check_refs.h"
+#include "parser/control_verbs.h"
 #include "parser/ComponentAlternation.h"
 #include "parser/ComponentAssertion.h"
 #include "parser/ComponentAtomicGroup.h"
@@ -52,8 +53,8 @@
 #include "parser/Parser.h"
 #include "ue2common.h"
 #include "util/compare.h"
+#include "util/flat_containers.h"
 #include "util/make_unique.h"
-#include "util/ue2_containers.h"
 #include "util/unicode_def.h"
 #include "util/verify_types.h"
 
@@ -115,7 +116,7 @@ unsigned parseAsDecimal(unsigned oct) {
 static constexpr u32 MAX_NUMBER = INT_MAX;
 
 static
-void pushDec(u32 *acc, u8 raw_digit) {
+void pushDec(u32 *acc, char raw_digit) {
     assert(raw_digit >= '0' && raw_digit <= '9');
     u32 digit_val = raw_digit - '0';
 
@@ -129,7 +130,7 @@ void pushDec(u32 *acc, u8 raw_digit) {
 }
 
 static
-void pushOct(u32 *acc, u8 raw_digit) {
+void pushOct(u32 *acc, char raw_digit) {
     assert(raw_digit >= '0' && raw_digit <= '7');
     u32 digit_val = raw_digit - '0';
 
@@ -168,8 +169,7 @@ ComponentSequence *enterSequence(ComponentSequence *parent,
 }
 
 static
-void addLiteral(ComponentSequence *currentSeq, unsigned char c,
-                const ParseMode &mode) {
+void addLiteral(ComponentSequence *currentSeq, char c, const ParseMode &mode) {
     if (mode.utf8 && mode.caseless) {
         /* leverage ComponentClass to generate the vertices */
         auto cc = getComponentClass(mode);
@@ -196,7 +196,7 @@ void addEscaped(ComponentSequence *currentSeq, unichar accum,
         if (accum > 255) {
             throw LocatedParseError(err_msg);
         }
-        addLiteral(currentSeq, (unsigned char)accum, mode);
+        addLiteral(currentSeq, (char)accum, mode);
     }
 }
 
@@ -216,7 +216,7 @@ void addEscapedHex(ComponentSequence *currentSeq, unichar accum,
 #define SLASH_C_ERROR "\\c must be followed by an ASCII character"
 
 static
-u8 decodeCtrl(u8 raw) {
+u8 decodeCtrl(char raw) {
     if (raw & 0x80) {
         throw LocatedParseError(SLASH_C_ERROR);
     }
@@ -224,10 +224,10 @@ u8 decodeCtrl(u8 raw) {
 }
 
 static
-unichar readUtf8CodePoint2c(const u8 *ts) {
+unichar readUtf8CodePoint2c(const char *s) {
+    auto *ts = (const u8 *)s;
     assert(ts[0] >= 0xc0 && ts[0] < 0xe0);
     assert(ts[1] >= 0x80 && ts[1] < 0xc0);
-
     unichar val = ts[0] & 0x1f;
     val <<= 6;
     val |= ts[1] & 0x3f;
@@ -237,7 +237,8 @@ unichar readUtf8CodePoint2c(const u8 *ts) {
 }
 
 static
-unichar readUtf8CodePoint3c(const u8 *ts) {
+unichar readUtf8CodePoint3c(const char *s) {
+    auto *ts = (const u8 *)s;
     assert(ts[0] >= 0xe0 && ts[0] < 0xf0);
     assert(ts[1] >= 0x80 && ts[1] < 0xc0);
     assert(ts[2] >= 0x80 && ts[2] < 0xc0);
@@ -252,7 +253,8 @@ unichar readUtf8CodePoint3c(const u8 *ts) {
 }
 
 static
-unichar readUtf8CodePoint4c(const u8 *ts) {
+unichar readUtf8CodePoint4c(const char *s) {
+    auto *ts = (const u8 *)s;
     assert(ts[0] >= 0xf0 && ts[0] < 0xf8);
     assert(ts[1] >= 0x80 && ts[1] < 0xc0);
     assert(ts[2] >= 0x80 && ts[2] < 0xc0);
@@ -272,12 +274,10 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
 %%{
     machine regex;
 
-    alphtype unsigned char;
-
     action throwUnsupportedEscape {
         ostringstream str;
-        str << "'\\" << (char)*(ts + 1) << "' at index "
-            << ts - ptr << " not supported in a character class.";
+        str << "'\\" << *(ts + 1) << "' at index " << ts - ptr
+            << " not supported in a character class.";
         throw ParseError(str.str());
     }
     action unsupportedProperty {
@@ -549,26 +549,25 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
     #############################################################
     readVerb := |*
         'UTF8)' => {
-            if (ts != ptr + 2) {
-                throw LocatedParseError("(*UTF8) must be at start of "
-                                        "expression, encountered");
-            }
-            mode.utf8 = true;
-            globalMode.utf8 = true; /* once you unicode, you can't stop */
-            ucp_start_p = te; /* (*UCP) can appear after us */
-            fret;
+            throw LocatedParseError("(*UTF8) must be at start of "
+                                    "expression, encountered");
+        };
+        'UTF)' => {
+            throw LocatedParseError("(*UTF) must be at start of "
+                                    "expression, encountered");
         };
         'UCP)' => {
-            if (ts != ucp_start_p + 2) {
-                throw LocatedParseError("(*UCP) must be at start of "
-                                        "expression, encountered");
-            }
-            mode.ucp = true;
-            globalMode.ucp = true; /* once you unicode, you can't stop */
-            fret;
+            throw LocatedParseError("(*UCP) must be at start of "
+                                    "expression, encountered");
         };
-        'UTF16)' => {
-            throw LocatedParseError("(*UTF16) not supported");
+        # Use the control verb mini-parser to report an error for this
+        # unsupported/unknown verb.
+        [^)]+ ')' => {
+            ParseMode temp_mode;
+            assert(ts - 2 >= ptr); // parser needs the '(*' at the start too.
+            read_control_verbs(ts - 2, te, (ts - 2 - ptr), temp_mode);
+            assert(0); // Should have thrown a parse error.
+            throw LocatedParseError("Unknown control verb");
         };
         any => {
             throw LocatedParseError("Unknown control verb");
@@ -977,8 +976,13 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
               };
 
               '\\o{' [0-7]+ '}' => {
-                  string oct((const char *)ts + 3, te - ts - 4);
-                  long int val = strtol(oct.c_str(), nullptr, 8);
+                  string oct(ts + 3, te - ts - 4);
+                  unsigned long val;
+                  try {
+                      val = stoul(oct, nullptr, 8);
+                  } catch (const std::out_of_range &) {
+                      val = MAX_UNICODE + 1;
+                  }
                   if ((!mode.utf8 && val > 255) || val > MAX_UNICODE) {
                       throw LocatedParseError("Value in \\o{...} sequence is too large");
                   }
@@ -1002,8 +1006,13 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
               };
               # Unicode Hex
               '\\x{' xdigit+ '}' => {
-                  string hex((const char *)ts + 3, te - ts - 4);
-                  long int val = strtol(hex.c_str(), nullptr, 16);
+                  string hex(ts + 3, te - ts - 4);
+                  unsigned long val;
+                  try {
+                      val = stoul(hex, nullptr, 16);
+                  } catch (const std::out_of_range &) {
+                      val = MAX_UNICODE + 1;
+                  }
                   if (val > MAX_UNICODE) {
                       throw LocatedParseError("Value in \\x{...} sequence is too large");
                   }
@@ -1092,7 +1101,7 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
 
               # Literal character
               (any - ']') => {
-                  currentCls->add(*ts);
+                  currentCls->add((u8)*ts);
               };
 
               ']' => {
@@ -1146,6 +1155,40 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
               '\\E' => {
                   fgoto main;
               };
+
+              #unicode chars
+              utf8_2c when is_utf8 => {
+                  assert(mode.utf8);
+                  /* leverage ComponentClass to generate the vertices */
+                  auto cc = getComponentClass(mode);
+                  cc->add(readUtf8CodePoint2c(ts));
+                  cc->finalize();
+                  currentSeq->addComponent(move(cc));
+              };
+
+              utf8_3c when is_utf8 => {
+                  assert(mode.utf8);
+                  /* leverage ComponentClass to generate the vertices */
+                  auto cc = getComponentClass(mode);
+                  cc->add(readUtf8CodePoint3c(ts));
+                  cc->finalize();
+                  currentSeq->addComponent(move(cc));
+              };
+
+              utf8_4c when is_utf8 => {
+                  assert(mode.utf8);
+                  /* leverage ComponentClass to generate the vertices */
+                  auto cc = getComponentClass(mode);
+                  cc->add(readUtf8CodePoint4c(ts));
+                  cc->finalize();
+                  currentSeq->addComponent(move(cc));
+              };
+
+              hi_byte when is_utf8 => {
+                  assert(mode.utf8);
+                  throwInvalidUtf8();
+              };
+
               # Literal character
               any => {
                   addLiteral(currentSeq, *ts, mode);
@@ -1160,6 +1203,31 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
               '\\E' => {
                   fret;
               };
+
+              #unicode chars
+              utf8_2c when is_utf8 => {
+                  assert(mode.utf8);
+                  currentCls->add(readUtf8CodePoint2c(ts));
+                  inCharClassEarly = false;
+              };
+
+              utf8_3c when is_utf8 => {
+                  assert(mode.utf8);
+                  currentCls->add(readUtf8CodePoint3c(ts));
+                  inCharClassEarly = false;
+              };
+
+              utf8_4c when is_utf8 => {
+                  assert(mode.utf8);
+                  currentCls->add(readUtf8CodePoint4c(ts));
+                  inCharClassEarly = false;
+              };
+
+              hi_byte when is_utf8 => {
+                  assert(mode.utf8);
+                  throwInvalidUtf8();
+              };
+
               # Literal character
               any => {
                   currentCls->add(*ts);
@@ -1226,9 +1294,8 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
               '\\Q' => {
                   fgoto readQuotedLiteral;
               };
-              '\\E' => {
-                  throw LocatedParseError("Unmatched \\E");
-              };
+              # An \E that is not preceded by a \Q is ignored
+              '\\E' => { /* noop */ };
               # Match any character
               '\.' => {
                   currentSeq->addComponent(generateComponent(CLASS_ANY, false, mode));
@@ -1447,12 +1514,12 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
                       // Otherwise, we interpret the first three digits as an
                       // octal escape, and the remaining characters stand for
                       // themselves as literals.
-                      const u8 *p = ts;
+                      const char *s = ts;
                       unsigned int accum = 0;
                       unsigned int oct_digits = 0;
-                      assert(*p == '\\'); // token starts at backslash
-                      for (++p; p < te && oct_digits < 3; ++oct_digits, ++p) {
-                          u8 digit = *p - '0';
+                      assert(*s == '\\'); // token starts at backslash
+                      for (++s; s < te && oct_digits < 3; ++oct_digits, ++s) {
+                          u8 digit = *s - '0';
                           if (digit < 8) {
                               accum = digit + accum * 8;
                           } else {
@@ -1465,8 +1532,8 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
                       }
 
                       // And then the rest of the digits, if any, are literal.
-                      for (; p < te; ++p) {
-                          addLiteral(currentSeq, *p, mode);
+                      for (; s < te; ++s) {
+                          addLiteral(currentSeq, *s, mode);
                       }
                   }
               };
@@ -1492,8 +1559,13 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
                   throw LocatedParseError("Invalid reference after \\g");
               };
               '\\o{' [0-7]+ '}' => {
-                  string oct((const char *)ts + 3, te - ts - 4);
-                  long int val = strtol(oct.c_str(), nullptr, 8);
+                  string oct(ts + 3, te - ts - 4);
+                  unsigned long val;
+                  try {
+                      val = stoul(oct, nullptr, 8);
+                  } catch (const std::out_of_range &) {
+                      val = MAX_UNICODE + 1;
+                  }
                   if ((!mode.utf8 && val > 255) || val > MAX_UNICODE) {
                       throw LocatedParseError("Value in \\o{...} sequence is too large");
                   }
@@ -1509,8 +1581,13 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
               };
               # Unicode Hex
               '\\x{' xdigit+ '}' => {
-                  string hex((const char *)ts + 3, te - ts - 4);
-                  long int val = strtol(hex.c_str(), nullptr, 16);
+                  string hex(ts + 3, te - ts - 4);
+                  unsigned long val;
+                  try {
+                      val = stoul(hex, nullptr, 16);
+                  } catch (const std::out_of_range &) {
+                      val = MAX_UNICODE + 1;
+                  }
                   if (val > MAX_UNICODE) {
                       throw LocatedParseError("Value in \\x{...} sequence is too large");
                   }
@@ -1533,8 +1610,8 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
               # A bunch of unsupported (for now) escapes
               escapedUnsupported => {
                   ostringstream str;
-                  str << "'\\" << (char)*(ts + 1) << "' at index "
-                      << ts - ptr << " not supported.";
+                  str << "'\\" << *(ts + 1) << "' at index " << ts - ptr
+                      << " not supported.";
                   throw ParseError(str.str());
               };
 
@@ -1835,16 +1912,22 @@ unichar readUtf8CodePoint4c(const u8 *ts) {
 %% write data nofinal;
 
 /** \brief Main parser call, returns root Component or nullptr. */
-unique_ptr<Component> parse(const char *const c_ptr, ParseMode &globalMode) {
-    const u8 * const ptr = (const u8 * const)c_ptr;
-    const u8 *p = ptr;
-    const u8 *pe = ptr + strlen(c_ptr);
-    const u8 *eof = pe;
+unique_ptr<Component> parse(const char *ptr, ParseMode &globalMode) {
+    assert(ptr);
+
+    const char *p = ptr;
+    const char *pe = ptr + strlen(ptr);
+
+    // First, read the control verbs, set any global mode flags and move the
+    // ptr forward.
+    p = read_control_verbs(p, pe, 0, globalMode);
+
+    const char *eof = pe;
     int cs;
     UNUSED int act;
     int top;
     vector<int> stack;
-    const u8 *ts, *te;
+    const char *ts, *te;
     unichar accumulator = 0;
     unichar octAccumulator = 0; /* required as we are also accumulating for
                                  * back ref when looking for octals */
@@ -1867,7 +1950,7 @@ unique_ptr<Component> parse(const char *const c_ptr, ParseMode &globalMode) {
     unsigned groupIndex = 1;
 
     // Set storing group names that are currently in use.
-    ue2::flat_set<string> groupNames;
+    flat_set<string> groupNames;
 
     // Root sequence.
     unique_ptr<ComponentSequence> rootSeq = ue2::make_unique<ComponentSequence>();
@@ -1890,9 +1973,7 @@ unique_ptr<Component> parse(const char *const c_ptr, ParseMode &globalMode) {
     bool inCharClassEarly = false;
 
     // Location at which the current character class began.
-    const u8 *currentClsBegin = p;
-
-    const u8 *ucp_start_p = p; /* for (*UCP) verb */
+    const char *currentClsBegin = p;
 
     // We throw exceptions on various parsing failures beyond this point: we
     // use a try/catch block here to clean up our allocated memory before we

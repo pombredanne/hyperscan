@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -34,17 +34,37 @@
 #ifndef UTIL_REPORT_H
 #define UTIL_REPORT_H
 
-#include "internal_report.h"
-#include "order_check.h"
 #include "ue2common.h"
+#include "util/exhaust.h" // for INVALID_EKEY
+#include "util/hash.h"
+#include "util/order_check.h"
 
 #include <cassert>
-
-struct internal_report;
 
 namespace ue2 {
 
 class ReportManager;
+
+enum ReportType {
+    EXTERNAL_CALLBACK,
+    EXTERNAL_CALLBACK_SOM_REL,
+    INTERNAL_SOM_LOC_SET,
+    INTERNAL_SOM_LOC_SET_IF_UNSET,
+    INTERNAL_SOM_LOC_SET_IF_WRITABLE,
+    INTERNAL_SOM_LOC_SET_SOM_REV_NFA,
+    INTERNAL_SOM_LOC_SET_SOM_REV_NFA_IF_UNSET,
+    INTERNAL_SOM_LOC_SET_SOM_REV_NFA_IF_WRITABLE,
+    INTERNAL_SOM_LOC_COPY,
+    INTERNAL_SOM_LOC_COPY_IF_WRITABLE,
+    INTERNAL_SOM_LOC_MAKE_WRITABLE,
+    EXTERNAL_CALLBACK_SOM_STORED,
+    EXTERNAL_CALLBACK_SOM_ABS,
+    EXTERNAL_CALLBACK_SOM_REV_NFA,
+    INTERNAL_SOM_LOC_SET_FROM,
+    INTERNAL_SOM_LOC_SET_FROM_IF_WRITABLE,
+    INTERNAL_ROSE_CHAIN,
+    EXTERNAL_CALLBACK_SOM_PASS
+};
 
 /**
  * \brief All the data we use for handling a match.
@@ -52,13 +72,12 @@ class ReportManager;
  * Includes extparam constraints and bounds, exhaustion/dedupe keys, offset
  * adjustment and SOM information.
  *
- * The data in this structure is converted into an \ref internal_report in the
- * bytecode.
+ * The data in this structure eventually becomes a list of Rose programs
+ * instructions.
  */
 struct Report {
-    Report(u8 type_in, u32 onmatch_in) : type(type_in), onmatch(onmatch_in) {
-        assert(type <= INTERNAL_ROSE_CHAIN);
-    }
+    Report(ReportType type_in, u32 onmatch_in)
+        : type(type_in), onmatch(onmatch_in) {}
 
     /** \brief True if this report has bounds from extended parameters, i.e.
      * min offset, max offset, min length. */
@@ -66,8 +85,8 @@ struct Report {
         return minOffset > 0 || maxOffset < MAX_OFFSET || minLength > 0;
     }
 
-    /** \brief from EXTERNAL_ and INTERNAL_ defined in internal_report.h. */
-    u8 type;
+    /** \brief Type of this report. */
+    ReportType type;
 
     /** \brief use SOM for minLength, but don't report it to user callback. */
     bool quashSom = false;
@@ -127,35 +146,6 @@ struct Report {
 };
 
 static inline
-bool isInternalSomReport(const Report &r) {
-    switch (r.type) {
-    case INTERNAL_SOM_LOC_SET:
-    case INTERNAL_SOM_LOC_SET_IF_UNSET:
-    case INTERNAL_SOM_LOC_SET_IF_WRITABLE:
-    case INTERNAL_SOM_LOC_SET_SOM_REV_NFA:
-    case INTERNAL_SOM_LOC_SET_SOM_REV_NFA_IF_UNSET:
-    case INTERNAL_SOM_LOC_SET_SOM_REV_NFA_IF_WRITABLE:
-    case INTERNAL_SOM_LOC_COPY:
-    case INTERNAL_SOM_LOC_COPY_IF_WRITABLE:
-    case INTERNAL_SOM_LOC_MAKE_WRITABLE:
-    case INTERNAL_SOM_LOC_SET_FROM:
-    case INTERNAL_SOM_LOC_SET_FROM_IF_WRITABLE:
-        return true;
-    case EXTERNAL_CALLBACK:
-    case EXTERNAL_CALLBACK_SOM_REL:
-    case EXTERNAL_CALLBACK_SOM_STORED:
-    case EXTERNAL_CALLBACK_SOM_ABS:
-    case EXTERNAL_CALLBACK_SOM_REV_NFA:
-    case INTERNAL_ROSE_CHAIN:
-        return false;
-    default:
-        break; // fall through
-    }
-    assert(0); // unknown?
-    return false;
-}
-
-static inline
 bool isExternalReport(const Report &r) {
     switch (r.type) {
     case INTERNAL_SOM_LOC_SET:
@@ -176,12 +166,18 @@ bool isExternalReport(const Report &r) {
     case EXTERNAL_CALLBACK_SOM_STORED:
     case EXTERNAL_CALLBACK_SOM_ABS:
     case EXTERNAL_CALLBACK_SOM_REV_NFA:
+    case EXTERNAL_CALLBACK_SOM_PASS:
         return true;
     default:
         break; // fall through
     }
     assert(0); // unknown?
     return true;
+}
+
+static inline
+bool isExternalSomReport(const Report &r) {
+    return r.type != EXTERNAL_CALLBACK && isExternalReport(r);
 }
 
 static inline
@@ -198,6 +194,16 @@ bool operator<(const Report &a, const Report &b) {
     ORDER_CHECK(revNfaIndex);
     ORDER_CHECK(topSquashDistance);
     return false;
+}
+
+inline
+bool operator==(const Report &a, const Report &b) {
+    return a.type == b.type && a.quashSom == b.quashSom &&
+           a.minOffset == b.minOffset && a.maxOffset == b.maxOffset &&
+           a.minLength == b.minLength && a.ekey == b.ekey &&
+           a.offsetAdjust == b.offsetAdjust && a.onmatch == b.onmatch &&
+           a.revNfaIndex == b.revNfaIndex && a.somDistance == b.somDistance &&
+           a.topSquashDistance == b.topSquashDistance;
 }
 
 static inline
@@ -223,7 +229,7 @@ Report makeSomRelativeCallback(u32 report, s32 offsetAdjust, u64a distance) {
 }
 
 static inline
-Report makeRoseTrigger(u32 event, u64a squashDistance) {
+Report makeMpvTrigger(u32 event, u64a squashDistance) {
     Report ir(INTERNAL_ROSE_CHAIN, event);
     ir.ekey = INVALID_EKEY;
     ir.topSquashDistance = squashDistance;
@@ -249,22 +255,19 @@ bool isSimpleExhaustible(const Report &ir) {
     return true;
 }
 
-/** True if this report requires some of the more esoteric processing in the
- * rose adaptor, rather than just firing a callback or doing SOM handling.
- */
-static inline
-bool isComplexReport(const Report &ir) {
-    if (ir.hasBounds() || ir.ekey != INVALID_EKEY) {
-        return true;
+} // namespace ue2
+
+namespace std {
+
+template<>
+struct hash<ue2::Report> {
+    std::size_t operator()(const ue2::Report &r) const {
+        return ue2::hash_all(r.type, r.quashSom, r.minOffset, r.maxOffset,
+                             r.minLength, r.ekey, r.offsetAdjust, r.onmatch,
+                             r.revNfaIndex, r.somDistance, r.topSquashDistance);
     }
+};
 
-    return false;
-}
-
-/** \brief Write the given Report into an internal_report structure. */
-void writeInternalReport(const Report &report, const ReportManager &rm,
-                         internal_report *ir);
-
-} // namespace
+} // namespace std
 
 #endif // UTIL_REPORT_H

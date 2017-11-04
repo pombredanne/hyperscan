@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Intel Corporation
+ * Copyright (c) 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -47,6 +47,7 @@
 #include "ng_prune.h"
 #include "ng_redundancy.h"
 #include "ng_util.h"
+#include "compiler/compiler.h"
 #include "parser/position.h" // for POS flags
 #include "util/bitutils.h" // for findAndClearLSB_32
 #include "util/boundary_reports.h"
@@ -101,7 +102,7 @@ vector<NFAEdge> getAsserts(const NGHolder &g) {
 
 static
 void addToSplit(const NGHolder &g, NFAVertex v, map<u32, NFAVertex> *to_split) {
-    DEBUG_PRINTF("%u needs splitting\n", g[v].index);
+    DEBUG_PRINTF("%zu needs splitting\n", g[v].index);
     to_split->emplace(g[v].index, v);
 }
 
@@ -184,47 +185,49 @@ void findSplitters(const NGHolder &g, const vector<NFAEdge> &asserts,
 }
 
 static
-void setReportId(ReportManager &rm, NGWrapper &g, NFAVertex v, s32 adj) {
+void setReportId(ReportManager &rm, NGHolder &g, const ExpressionInfo &expr,
+                 NFAVertex v, s32 adj) {
     // Don't try and set the report ID of a special vertex.
     assert(!is_special(v, g));
 
     // If there's a report set already, we're replacing it.
     g[v].reports.clear();
 
-    Report ir = rm.getBasicInternalReport(g, adj);
+    Report ir = rm.getBasicInternalReport(expr, adj);
 
     g[v].reports.insert(rm.getInternalId(ir));
-    DEBUG_PRINTF("set report id for vertex %u, adj %d\n", g[v].index, adj);
+    DEBUG_PRINTF("set report id for vertex %zu, adj %d\n", g[v].index, adj);
 }
 
 static
-NFAVertex makeClone(ReportManager &rm, NGWrapper &g, NFAVertex v,
-                    const CharReach &cr_mask) {
+NFAVertex makeClone(ReportManager &rm, NGHolder &g, const ExpressionInfo &expr,
+                    NFAVertex v, const CharReach &cr_mask) {
     NFAVertex clone = clone_vertex(g, v);
     g[clone].char_reach &= cr_mask;
     clone_out_edges(g, v, clone);
     clone_in_edges(g, v, clone);
 
     if (v == g.startDs) {
-        if (g.utf8) {
+        if (expr.utf8) {
             g[clone].char_reach &= ~UTF_START_CR;
         }
 
         DEBUG_PRINTF("marked as virt\n");
         g[clone].assert_flags = POS_FLAG_VIRTUAL_START;
 
-        setReportId(rm, g, clone, 0);
+        setReportId(rm, g, expr, clone, 0);
     }
 
     return clone;
 }
 
 static
-void splitVertex(ReportManager &rm, NGWrapper &g, NFAVertex v, bool ucp) {
+void splitVertex(ReportManager &rm, NGHolder &g, const ExpressionInfo &expr,
+                 NFAVertex v, bool ucp) {
     assert(v != g.start);
     assert(v != g.accept);
     assert(v != g.acceptEod);
-    DEBUG_PRINTF("partitioning vertex %u ucp:%d\n", g[v].index, (int)ucp);
+    DEBUG_PRINTF("partitioning vertex %zu ucp:%d\n", g[v].index, (int)ucp);
 
     CharReach cr_word = ucp ? CHARREACH_WORD_UCP_PRE : CHARREACH_WORD;
     CharReach cr_nonword = ucp ? CHARREACH_NONWORD_UCP_PRE : CHARREACH_NONWORD;
@@ -232,14 +235,14 @@ void splitVertex(ReportManager &rm, NGWrapper &g, NFAVertex v, bool ucp) {
     auto has_no_assert = [&g](const NFAEdge &e) { return !g[e].assert_flags; };
 
     // Split v into word/nonword vertices with only asserting out-edges.
-    NFAVertex w_out = makeClone(rm, g, v, cr_word);
-    NFAVertex nw_out = makeClone(rm, g, v, cr_nonword);
+    NFAVertex w_out = makeClone(rm, g, expr, v, cr_word);
+    NFAVertex nw_out = makeClone(rm, g, expr, v, cr_nonword);
     remove_out_edge_if(w_out, has_no_assert, g);
     remove_out_edge_if(nw_out, has_no_assert, g);
 
     // Split v into word/nonword vertices with only asserting in-edges.
-    NFAVertex w_in = makeClone(rm, g, v, cr_word);
-    NFAVertex nw_in = makeClone(rm, g, v, cr_nonword);
+    NFAVertex w_in = makeClone(rm, g, expr, v, cr_word);
+    NFAVertex nw_in = makeClone(rm, g, expr, v, cr_nonword);
     remove_in_edge_if(w_in, has_no_assert, g);
     remove_in_edge_if(nw_in, has_no_assert, g);
 
@@ -250,7 +253,8 @@ void splitVertex(ReportManager &rm, NGWrapper &g, NFAVertex v, bool ucp) {
 }
 
 static
-void resolveEdges(ReportManager &rm, NGWrapper &g, set<NFAEdge> *dead) {
+void resolveEdges(ReportManager &rm, NGHolder &g, const ExpressionInfo &expr,
+                  set<NFAEdge> *dead) {
     for (const auto &e : edges_range(g)) {
         u32 flags = g[e].assert_flags;
         if (!flags) {
@@ -267,8 +271,8 @@ void resolveEdges(ReportManager &rm, NGWrapper &g, set<NFAEdge> *dead) {
 
         bool impassable = true;
         bool ucp = flags & UCP_ASSERT_FLAGS;
-        DEBUG_PRINTF("resolving edge %u->%u (flags=0x%x, ucp=%d)\n", g[u].index,
-                     g[v].index, flags, (int)ucp);
+        DEBUG_PRINTF("resolving edge %zu->%zu (flags=0x%x, ucp=%d)\n",
+                     g[u].index, g[v].index, flags, (int)ucp);
         while (flags && impassable) {
             u32 flag = 1U << findAndClearLSB_32(&flags);
             switch (flag) {
@@ -363,7 +367,7 @@ void resolveEdges(ReportManager &rm, NGWrapper &g, set<NFAEdge> *dead) {
             } else if (v_w) {
                 /* need to add a word byte */
                 NFAVertex vv = add_vertex(g);
-                setReportId(rm, g, vv, -1);
+                setReportId(rm, g, expr, vv, -1);
                 g[vv].char_reach = CHARREACH_WORD;
                 add_edge(vv, g.accept, g);
                 g[e].assert_flags = 0;
@@ -372,22 +376,19 @@ void resolveEdges(ReportManager &rm, NGWrapper &g, set<NFAEdge> *dead) {
             } else {
                 /* need to add a non word byte or see eod */
                 NFAVertex vv = add_vertex(g);
-                setReportId(rm, g, vv, -1);
+                setReportId(rm, g, expr, vv, -1);
                 g[vv].char_reach = CHARREACH_NONWORD;
                 add_edge(vv, g.accept, g);
                 g[e].assert_flags = 0;
                 add_edge(u, vv, g[e], g);
-                if (!edge(u, g.acceptEod, g).second) {
-                    add_edge(u, g.acceptEod, g[e], g);
-                } else {
-                    /* there may already be a different edge from start to eod
-                     * if so we need to make it unconditional and alive
-                     */
-                    NFAEdge start_eod = edge(u, g.acceptEod, g).first;
-
+                /* there may already be a different edge from start to eod if so
+                 * we need to make it unconditional and alive
+                 */
+                if (NFAEdge start_eod = edge(u, g.acceptEod, g)) {
                     g[start_eod].assert_flags = 0;
                     dead->erase(start_eod);
-
+                } else {
+                    add_edge(u, g.acceptEod, g[e], g);
                 }
                 dead->insert(e);
             }
@@ -419,7 +420,7 @@ void resolveEdges(ReportManager &rm, NGWrapper &g, set<NFAEdge> *dead) {
             } else if (v_w) {
                 /* need to add a word byte */
                 NFAVertex vv = add_vertex(g);
-                setReportId(rm, g, vv, -1);
+                setReportId(rm, g, expr, vv, -1);
                 g[vv].char_reach = CHARREACH_WORD_UCP_PRE;
                 add_edge(vv, g.accept, g);
                 g[e].assert_flags = 0;
@@ -428,22 +429,19 @@ void resolveEdges(ReportManager &rm, NGWrapper &g, set<NFAEdge> *dead) {
             } else {
                 /* need to add a non word byte or see eod */
                 NFAVertex vv = add_vertex(g);
-                setReportId(rm, g, vv, -1);
+                setReportId(rm, g, expr, vv, -1);
                 g[vv].char_reach = CHARREACH_NONWORD_UCP_PRE;
                 add_edge(vv, g.accept, g);
                 g[e].assert_flags = 0;
                 add_edge(u, vv, g[e], g);
-                if (!edge(u, g.acceptEod, g).second) {
-                    add_edge(u, g.acceptEod, g[e], g);
-                } else {
-                    /* there may already be a different edge from start to eod
-                     * if so we need to make it unconditional and alive
-                     */
-                    NFAEdge start_eod = edge(u, g.acceptEod, g).first;
-
+                /* there may already be a different edge from start to eod if so
+                 * we need to make it unconditional and alive
+                 */
+                if (NFAEdge start_eod = edge(u, g.acceptEod, g)) {
                     g[start_eod].assert_flags = 0;
                     dead->erase(start_eod);
-
+                } else {
+                    add_edge(u, g.acceptEod, g[e], g);
                 }
                 dead->insert(e);
             }
@@ -456,7 +454,8 @@ void resolveEdges(ReportManager &rm, NGWrapper &g, set<NFAEdge> *dead) {
     }
 }
 
-void resolveAsserts(ReportManager &rm, NGWrapper &g) {
+void resolveAsserts(ReportManager &rm, NGHolder &g,
+                    const ExpressionInfo &expr) {
     vector<NFAEdge> asserts = getAsserts(g);
     if (asserts.empty()) {
         return;
@@ -466,42 +465,41 @@ void resolveAsserts(ReportManager &rm, NGWrapper &g) {
     map<u32, NFAVertex> to_split_ucp; /* by index, for determinism */
     findSplitters(g, asserts, &to_split, &to_split_ucp);
     if (to_split.size() + to_split_ucp.size() > MAX_CLONED_VERTICES) {
-        throw CompileError(g.expressionIndex, "Pattern is too large.");
+        throw CompileError(expr.index, "Pattern is too large.");
     }
 
     for (const auto &m : to_split) {
         assert(!contains(to_split_ucp, m.first));
-        splitVertex(rm, g, m.second, false);
+        splitVertex(rm, g, expr, m.second, false);
     }
 
     for (const auto &m : to_split_ucp) {
-        splitVertex(rm, g, m.second, true);
+        splitVertex(rm, g, expr, m.second, true);
     }
 
     set<NFAEdge> dead;
-    resolveEdges(rm, g, &dead);
+    resolveEdges(rm, g, expr, &dead);
 
     remove_edges(dead, g);
-    g.renumberVertices();
+    renumber_vertices(g);
     pruneUseless(g);
     pruneEmptyVertices(g);
 
-    g.renumberVertices();
-    g.renumberEdges();
+    renumber_vertices(g);
+    renumber_edges(g);
     clearReports(g);
 }
 
-void ensureCodePointStart(ReportManager &rm, NGWrapper &g) {
+void ensureCodePointStart(ReportManager &rm, NGHolder &g,
+                          const ExpressionInfo &expr) {
     /* In utf8 mode there is an implicit assertion that we start at codepoint
      * boundaries. Assert resolution handles the badness coming from asserts.
      * The only other source of trouble is startDs->accept connections.
      */
-    bool exists;
-    NFAEdge orig;
-    tie(orig, exists) = edge(g.startDs, g.accept, g);
-    if (g.utf8 && exists) {
-        DEBUG_PRINTF("rectifying %u\n", g.reportId);
-        Report ir = rm.getBasicInternalReport(g);
+    NFAEdge orig = edge(g.startDs, g.accept, g);
+    if (expr.utf8 && orig) {
+        DEBUG_PRINTF("rectifying %u\n", expr.report);
+        Report ir = rm.getBasicInternalReport(expr);
         ReportID rep = rm.getInternalId(ir);
 
         NFAVertex v_a = add_vertex(g);
@@ -552,7 +550,8 @@ void ensureCodePointStart(ReportManager &rm, NGWrapper &g) {
         add_edge(g.start, v_4, g);
         add_edge(g.startDs, v_4, g);
         remove_edge(orig, g);
-        g.renumberEdges();
+        renumber_edges(g);
+        clearReports(g);
     }
 }
 
