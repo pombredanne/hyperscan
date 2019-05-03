@@ -2,6 +2,44 @@
 
 This is a list of notable changes to Hyperscan, in reverse chronological order.
 
+## [5.1.1] 2019-04-03
+- Add extra detection and handling when invalid rose programs are triggered.
+- Bugfix for issue #136: fix CMake parsing of CPU architecure for GCC-9.
+- Bugfix for issue #137: avoid file path impact on fat runtime build.
+- Bugfix for issue #141: fix rose literal programs for multi-pattern
+  matching when no pattern ids are provided.
+- Bugfix for issue #144: fix library install path in pkg-config files.
+
+## [5.1.0] 2019-01-17
+- Improve DFA state compression by wide-state optimization to reduce bytecode
+  size.
+- Create specific interpreter runtime handling to boost the performance of pure
+  literal matching.
+- Optimize original presentation of interpreter (the "Rose" engine ) to
+  increase overall performance.
+- Bugfix for logical combinations: fix error reporting combination's match in
+  case of sub-expression has EOD match under streaming mode.
+- Bugfix for logical combinations: fix miss reporting combination's match under
+  vacuous input.
+- Bugfix for issue #104: fix compile error with Boost 1.68.0.
+- Bugfix for issue #127: avoid pcre error for hscollider with installed PCRE
+  package.
+- Update version of PCRE used by testing tools as a syntax and semantic
+  reference to PCRE 8.41 or above.
+- Fix github repo address in doc.
+
+## [5.0.0] 2018-07-09
+- Introduce chimera hybrid engine of Hyperscan and PCRE, to fully support
+  PCRE syntax as well as to take advantage of the high performance nature of
+  Hyperscan.
+- New API feature: logical combinations (AND, OR and NOT) of patterns in a
+  given pattern set.
+- Windows porting: hsbench, hscheck, hscollider and hsdump tools now available
+  on Windows 8 or newer.
+- Improve undirected graph implementation to avoid graph copy and reduce
+  compile time.
+- Bugfix for issue #86: enable hscollider for installed PCRE package.
+
 ## [4.7.0] 2018-01-24
 - Introduced hscollider pattern testing tool, for validating Hyperscan match
   behaviour against PCRE.
