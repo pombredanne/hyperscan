@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018, Intel Corporation
+ * Copyright (c) 2015-2020, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -201,7 +201,18 @@ enum RoseInstructionCode {
     /** \brief Mark as exhausted instead of report while quiet. */
     ROSE_INSTR_SET_EXHAUST,
 
-    LAST_ROSE_INSTRUCTION = ROSE_INSTR_SET_EXHAUST //!< Sentinel.
+    /**
+     * \brief Calculate any combination's logical value if none of its
+     * sub-expression matches until EOD, then check if compliant with any
+     * logical constraints.
+     */
+    ROSE_INSTR_LAST_FLUSH_COMBINATION,
+
+    ROSE_INSTR_CHECK_SHUFTI_64x8, //!< Check 64-byte data by 8-bucket shufti.
+    ROSE_INSTR_CHECK_SHUFTI_64x16, //!< Check 64-byte data by 16-bucket shufti.
+    ROSE_INSTR_CHECK_MASK_64,     //!< 64-bytes and/cmp/neg mask check.
+
+    LAST_ROSE_INSTRUCTION = ROSE_INSTR_CHECK_MASK_64 //!< Sentinel.
 };
 
 struct ROSE_STRUCT_END {
@@ -278,6 +289,15 @@ struct ROSE_STRUCT_CHECK_MASK_32 {
     u32 fail_jump; //!< Jump forward this many bytes on failure.
 };
 
+struct ROSE_STRUCT_CHECK_MASK_64 {
+    u8 code; //!< From enum RoseInstructionCode.
+    u8 and_mask[64]; //!< 64-byte and mask.
+    u8 cmp_mask[64]; //!< 64-byte cmp mask.
+    u64a neg_mask; //!< negation mask with 32 bits.
+    s32 offset; //!< Relative offset of the first byte.
+    u32 fail_jump; //!< Jump forward this many bytes on failure.
+};
+
 struct ROSE_STRUCT_CHECK_BYTE {
     u8 code; //!< From enum RoseInstructionCode.
     u8 and_mask; //!< 8-bits and mask.
@@ -325,6 +345,29 @@ struct ROSE_STRUCT_CHECK_SHUFTI_32x16 {
     u8 bucket_select_mask_hi[32]; //!< Bucket mask for high 8 buckets.
     u8 bucket_select_mask_lo[32]; //!< Bucket mask for low 8 buckets.
     u32 neg_mask; //!< 32 bits negation mask.
+    s32 offset; //!< Relative offset of the first byte.
+    u32 fail_jump; //!< Jump forward this many bytes on failure.
+};
+
+struct ROSE_STRUCT_CHECK_SHUFTI_64x8 {
+    u8 code; //!< From enum RoseInstructionCode.
+    u8 hi_mask[64]; //!< High nibble mask in shufti.
+    u8 lo_mask[64]; //!< Low nibble mask in shufti.
+    u8 bucket_select_mask[64]; //!< Mask for bucket assigning.
+    u64a neg_mask; //!< 64 bits negation mask.
+    s32 offset; //!< Relative offset of the first byte.
+    u32 fail_jump; //!< Jump forward this many bytes on failure.
+};
+
+struct ROSE_STRUCT_CHECK_SHUFTI_64x16 {
+    u8 code; //!< From enum RoseInstructionCode.
+    u8 hi_mask_1[64]; //!< 4 copies of 0-15 High nibble mask.
+    u8 hi_mask_2[64]; //!< 4 copies of 16-32 High nibble mask.
+    u8 lo_mask_1[64]; //!< 4 copies of 0-15 Low nibble mask.
+    u8 lo_mask_2[64]; //!< 4 copies of 16-32 Low nibble mask.
+    u8 bucket_select_mask_hi[64]; //!< Bucket mask for high 8 buckets.
+    u8 bucket_select_mask_lo[64]; //!< Bucket mask for low 8 buckets.
+    u64a neg_mask; //!< 64 bits negation mask.
     s32 offset; //!< Relative offset of the first byte.
     u32 fail_jump; //!< Jump forward this many bytes on failure.
 };
@@ -673,5 +716,9 @@ struct ROSE_STRUCT_FLUSH_COMBINATION {
 struct ROSE_STRUCT_SET_EXHAUST {
     u8 code; //!< From enum RoseInstructionCode.
     u32 ekey; //!< Exhaustion key.
+};
+
+struct ROSE_STRUCT_LAST_FLUSH_COMBINATION {
+    u8 code; //!< From enum RoseInstructionCode.
 };
 #endif // ROSE_ROSE_PROGRAM_H

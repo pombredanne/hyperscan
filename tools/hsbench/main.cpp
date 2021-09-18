@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2018, Intel Corporation
+ * Copyright (c) 2016-2020, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -87,6 +87,7 @@ unsigned int somPrecisionMode = HS_MODE_SOM_HORIZON_LARGE;
 bool forceEditDistance = false;
 unsigned editDistance = 0;
 bool printCompressSize = false;
+bool useLiteralApi = false;
 
 // Globals local to this file.
 static bool compressStream = false;
@@ -97,6 +98,7 @@ bool display_per_scan = false;
 ScanMode scan_mode = ScanMode::STREAMING;
 bool useHybrid = false;
 bool usePcre = false;
+bool dumpCsvOut = false;
 unsigned repeats = 20;
 string exprPath("");
 string corpusFile("");
@@ -206,8 +208,11 @@ void usage(const char *error) {
     printf("  -P              Benchmark using PCRE (if supported).\n");
 #endif
 #if defined(HAVE_DECL_PTHREAD_SETAFFINITY_NP) || defined(_WIN32)
-    printf("  -T CPU,CPU,...  Benchmark with threads on these CPUs.\n");
+    printf("  -T CPU,CPU,... or -T CPU-CPU\n");
+    printf("                  Benchmark with threads on specified CPUs or CPU"
+           " range.\n");
 #endif
+    printf("  -C              Dump CSV output for tput matrix.\n");
     printf("  -i DIR          Don't compile, load from files in DIR"
            " instead.\n");
     printf("  -w DIR          After compiling, save to files in DIR.\n");
@@ -218,6 +223,7 @@ void usage(const char *error) {
     printf("  --per-scan      Display per-scan Mbit/sec results.\n");
     printf("  --echo-matches  Display all matches that occur during scan.\n");
     printf("  --sql-out FILE  Output sqlite db.\n");
+    printf("  --literal-on    Use Hyperscan pure literal matching.\n");
     printf("  -S NAME         Signature set name (for sqlite db).\n");
     printf("\n\n");
 
@@ -250,6 +256,7 @@ void processArgs(int argc, char *argv[], vector<BenchmarkSigs> &sigSets,
     int do_echo_matches = 0;
     int do_sql_output = 0;
     int option_index = 0;
+    int literalFlag = 0;
     vector<string> sigFiles;
 
     static struct option longopts[] = {
@@ -257,6 +264,7 @@ void processArgs(int argc, char *argv[], vector<BenchmarkSigs> &sigSets,
         {"echo-matches", no_argument, &do_echo_matches, 1},
         {"compress-stream", no_argument, &do_compress, 1},
         {"sql-out", required_argument, &do_sql_output, 1},
+        {"literal-on", no_argument, &literalFlag, 1},
         {nullptr, 0, nullptr, 0}
     };
 
@@ -268,6 +276,9 @@ void processArgs(int argc, char *argv[], vector<BenchmarkSigs> &sigSets,
         switch (c) {
         case 'c':
             corpusFile.assign(optarg);
+            break;
+        case 'C':
+            dumpCsvOut = true;
             break;
         case 'd': {
             unsigned dist;
@@ -350,7 +361,8 @@ void processArgs(int argc, char *argv[], vector<BenchmarkSigs> &sigSets,
         case 'T':
             if (!strToList(optarg, threadCores)) {
                 usage("Couldn't parse argument to -T flag, should be"
-                      " a list of positive integers.");
+                      " a list of positive integers or 2 integers"
+                      " connected with hyphen.");
                 exit(1);
             }
             break;
@@ -463,6 +475,8 @@ void processArgs(int argc, char *argv[], vector<BenchmarkSigs> &sigSets,
         loadSignatureList(file, sigs);
         sigSets.emplace_back(file, move(sigs));
     }
+
+    useLiteralApi = (bool)literalFlag;
 }
 
 /** Start the global timer. */
@@ -840,6 +854,40 @@ void displayResults(const vector<unique_ptr<ThreadContext>> &threads,
     }
 }
 
+/** Dump benchmark results to csv. */
+static
+void displayCsvResults(const vector<unique_ptr<ThreadContext>> &threads,
+                       const vector<DataBlock> &corpus_blocks) {
+    u64a bytesPerRun = byte_size(corpus_blocks);
+    u64a matchesPerRun = threads[0]->results[0].matches;
+
+    // Sanity check: all of our results should have the same match count.
+    for (const auto &t : threads) {
+        if (!all_of(begin(t->results), end(t->results),
+                    [&matchesPerRun](const ResultEntry &e) {
+                        return e.matches == matchesPerRun;
+                    })) {
+            printf("\nWARNING: PER-SCAN MATCH COUNTS ARE INCONSISTENT!\n\n");
+            break;
+        }
+    }
+
+    u64a totalBytes = bytesPerRun * repeats * threads.size();
+    u64a totalBlocks = corpus_blocks.size() * repeats * threads.size();
+    printf(",\"%0.3f\"", totalSecs);
+    printf(",\"%0.2Lf\"", calc_mbps(totalSecs, totalBytes));
+
+    assert(bytesPerRun);
+    double matchRate = ((double)matchesPerRun * 1024) / bytesPerRun;
+    printf(",\"%llu\"", matchesPerRun);
+    printf(",\"%0.3f\"", matchRate);
+
+    double blockRate = (double)totalBlocks / (double)totalSecs;
+    printf(",\"%0.2f\"", blockRate);
+    printf("\n");
+}
+
+
 /** Dump per-scan throughput data to sql. */
 static
 void sqlPerScanResults(const vector<unique_ptr<ThreadContext>> &threads,
@@ -973,7 +1021,9 @@ void runBenchmark(const Engine &db,
         t->join();
     }
 
-    if (sqloutFile.empty()) {
+    if (dumpCsvOut) {
+        displayCsvResults(threads, corpus_blocks);
+    } else if (sqloutFile.empty()) {
         // Display global results.
         displayResults(threads, corpus_blocks);
     } else {
@@ -1050,7 +1100,9 @@ int HS_CDECL main(int argc, char *argv[]) {
                 exit(1);
             }
 
-            if (sqloutFile.empty()) {
+            if (dumpCsvOut) {
+                engine->printCsvStats();
+            } else if (sqloutFile.empty()) {
                 // Display global results.
                 engine->printStats();
                 printf("\n");
